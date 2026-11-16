@@ -5,11 +5,8 @@ Autor: JZ DEV
 
 from __future__ import annotations
 
-import base64
 import faulthandler
-import json
 import logging
-import mimetypes
 import os
 import queue
 import sys
@@ -17,18 +14,39 @@ import threading
 import time
 import traceback
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 from dotenv import load_dotenv, set_key
-from google import genai
 from PIL import Image
+
+from clipboard_utils import copy_image_to_clipboard, paste_image_from_clipboard
+from genai_service import (
+    MODEL_PRICING_USD_PER_1M,
+    MODELS,
+    PROMPT_EXPANDER_MODEL,
+    USD_TO_BRL,
+    build_interaction_input as _build_interaction_input,
+    create_image_interaction,
+    detect_mime_type as _detect_mime_type,
+    expand_prompt_with_gemini,
+    format_api_response as _format_api_response,
+    format_usage_summary as _format_usage_summary,
+    sanitize_for_log as _sanitize_for_log,
+)
+from metadata_utils import (
+    GenerationMetadata,
+    format_metadata_badge,
+    read_png_metadata,
+    save_png_with_metadata,
+)
+from presets_manager import apply_preset_to_prompt, load_presets, save_preset
 
 APP_DIR = Path(__file__).resolve().parent
 ENV_PATH = APP_DIR / ".env"
 LOGS_DIR = APP_DIR / "logs"
+CLIPBOARD_CACHE_DIR = LOGS_DIR / "clipboard_cache"
 DEFAULT_OUTPUT_DIR = Path.home() / "Pictures" / "NanoBanana"
 
 # Paleta de cores sóbria estilo estúdio técnico
@@ -43,118 +61,26 @@ ACCENT_AMBER_HOVER = "#CF952C"
 ACCENT_TEXT = "#131518"
 DANGER_COLOR = "#D9534F"
 
-MODELS = {
-    "2.1": {
-        "id": "gemini-nano-banana-2.1",
-        "prefix": "nb21",
-        "label": "Nano Banana 2.1  (Novo • ~R$ 0,19/img)",
-    },
-    "2_lite": {
-        "id": "gemini-3.1-flash-lite-image",
-        "prefix": "nb2lite",
-        "label": "Nano Banana 2 Lite  (Econômico • ~R$ 0,19/img)",
-    },
-    "2": {
-        "id": "gemini-3.1-flash-image",
-        "prefix": "nb2",
-        "label": "Nano Banana 2  (Flash • ~R$ 0,38/img)",
-    },
-    "pro": {
-        "id": "gemini-3-pro-image",
-        "prefix": "pro",
-        "label": "Nano Banana Pro  (Máxima qualidade • ~R$ 0,76/img)",
-    },
-    "1": {
-        "id": "gemini-2.5-flash-image",
-        "prefix": "nb1",
-        "label": "Nano Banana  (2.5 Flash • ~R$ 0,22/img)",
-    },
-}
-
-# Preços aproximados em USD por 1 milhão de tokens (Google AI Studio - Paid Tier)
-MODEL_PRICING_USD_PER_1M = {
-    "gemini-nano-banana-2.1": {"input": 1.50, "output": 30.00},
-    "gemini-3.1-flash-lite-image": {"input": 0.25, "output": 30.00},
-    "gemini-3.1-flash-image": {"input": 0.50, "output": 60.00},
-    "gemini-3-pro-image": {"input": 2.00, "output": 120.00},
-    "gemini-2.5-flash-image": {"input": 0.30, "output": 30.00},
-}
-USD_TO_BRL = 5.70
-
 RESOLUTIONS = ["1K", "2K", "4K"]
 ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4"]
+MAX_REF_IMAGES = 4
+PRESET_PLACEHOLDER = "Aplicar preset..."
 
-
-def _detect_mime_type(file_path: Path) -> str:
-    """Detecta o MIME type da imagem anexada."""
-    mime, _ = mimetypes.guess_type(str(file_path))
-    if mime and mime.startswith("image/"):
-        return mime
-    return "image/png"
-
-
-def _sanitize_for_log(obj: object, key_name: str = "") -> object:
-    """Resume payloads binários/assinaturas longas para não travar o painel de log."""
-    if isinstance(obj, dict):
-        return {k: _sanitize_for_log(v, k) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [_sanitize_for_log(item, key_name) for item in obj]
-    if isinstance(obj, str):
-        if key_name in {"data", "signature"} and len(obj) > 120:
-            return f"<{key_name}: {len(obj)} chars>"
-        if len(obj) > 1000:
-            return f"{obj[:300]}... <truncado: {len(obj)} chars>"
-    return obj
-
-
-def _format_api_response(interaction: object) -> str:
-    """Serializa o objeto de retorno da API Gemini em JSON legível."""
-    if hasattr(interaction, "model_dump"):
-        raw = interaction.model_dump(exclude_none=True, mode="json")
-    elif hasattr(interaction, "__dict__"):
-        raw = vars(interaction)
-    else:
-        return repr(interaction)
-    return json.dumps(_sanitize_for_log(raw), indent=2, ensure_ascii=False, default=str)
-
-
-def _format_usage_summary(interaction: object, model_id: str) -> str:
-    """Calcula o total de tokens (input + output) e o custo aproximado em BRL."""
-    usage = getattr(interaction, "usage", None)
-    if usage is None:
-        return "Tokens consumidos: indisponível (API não retornou usage) | Valor aprox.: R$ --"
-
-    in_tok = getattr(usage, "total_input_tokens", None) or 0
-    out_tok = getattr(usage, "total_output_tokens", None) or 0
-    thought_tok = getattr(usage, "total_thought_tokens", None) or 0
-    api_total = getattr(usage, "total_tokens", None) or 0
-    total_consumed = (in_tok + out_tok) or api_total
-
-    pricing = MODEL_PRICING_USD_PER_1M.get(model_id, {"input": 0.0, "output": 0.0})
-    usd_cost = (in_tok / 1_000_000) * pricing["input"] + (out_tok / 1_000_000) * pricing["output"]
-    brl_cost = usd_cost * USD_TO_BRL
-    brl_str = f"{brl_cost:.2f}".replace(".", ",")
-
-    extra = f" | thought: {thought_tok}" if thought_tok else ""
-    return (
-        f"Tokens consumidos: {total_consumed} (input: {in_tok} + output: {out_tok}{extra}) "
-        f"| Valor aprox.: R$ {brl_str} (US$ {usd_cost:.2f})"
-    )
-
-
-def _build_interaction_input(prompt: str, ref_image_path: Path | None) -> str | list[dict]:
-    """Monta o payload de entrada para text-to-image ou edição com imagem de referência."""
-    if ref_image_path is None:
-        return prompt
-    image_bytes = ref_image_path.read_bytes()
-    return [
-        {"type": "text", "text": prompt},
-        {
-            "type": "image",
-            "data": base64.b64encode(image_bytes).decode("utf-8"),
-            "mime_type": _detect_mime_type(ref_image_path),
-        },
-    ]
+__all__ = [
+    "APP_DIR",
+    "DEFAULT_OUTPUT_DIR",
+    "ENV_PATH",
+    "LOGS_DIR",
+    "MODEL_PRICING_USD_PER_1M",
+    "MODELS",
+    "NanoBananaApp",
+    "USD_TO_BRL",
+    "_build_interaction_input",
+    "_detect_mime_type",
+    "_format_api_response",
+    "_format_usage_summary",
+    "_sanitize_for_log",
+]
 
 
 class NanoBananaApp(ctk.CTk):
@@ -166,7 +92,7 @@ class NanoBananaApp(ctk.CTk):
 
         ctk.set_appearance_mode("dark")
         self.title("BananaForge — Gemini Image Studio • JZ DEV")
-        self.geometry("1320x760")
+        self.geometry("1340x800")
         self.minsize(1100, 660)
         self.configure(fg_color=BG_APP)
 
@@ -175,16 +101,23 @@ class NanoBananaApp(ctk.CTk):
         self.selected_aspect = ctk.StringVar(value="1:1")
         self.output_dir_var = ctk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
         self.api_key_status_var = ctk.StringVar()
+        self.multi_turn_var = ctk.BooleanVar(value=False)
+        self.selected_preset_var = ctk.StringVar(value=PRESET_PLACEHOLDER)
 
-        self.attached_image_path: Path | None = None
+        self.attached_image_paths: list[Path] = []
+        self.current_interaction_id: str | None = None
+        self.current_metadata: GenerationMetadata | None = None
+        self.presets: list[dict[str, str]] = load_presets()
         self.last_generated_path: Path | None = None
         self.last_pil_image: Image.Image | None = None
         self.preview_ctk_image: ctk.CTkImage | None = None
         self.is_generating = False
+        self.is_expanding = False
         self.log_visible = False
 
         self._model_checkboxes: dict[str, ctk.CTkCheckBox] = {}
         self._res_checkboxes: dict[str, ctk.CTkCheckBox] = {}
+        self._ref_thumb_refs: list[ctk.CTkImage] = []
         self._history_items: dict[Path, ctk.CTkFrame] = {}
         self._history_thumb_refs: list[ctk.CTkImage] = []
         self._thumb_cache: dict[tuple[Path, float], Image.Image] = {}
@@ -200,10 +133,17 @@ class NanoBananaApp(ctk.CTk):
 
         self._build_ui()
         self._refresh_api_key_status()
+        self._update_turn_status_label()
+        self._render_ref_chips()
         self._log(f"Aplicativo iniciado. Log em arquivo: {self._log_file_path}")
         self._refresh_history()
         self.after(40, self._process_ui_queue)
         self._start_freeze_watchdog()
+
+    @property
+    def attached_image_path(self) -> Path | None:
+        """Compatibilidade para leitura da primeira imagem anexada."""
+        return self.attached_image_paths[0] if self.attached_image_paths else None
 
     def _setup_file_logging(self) -> tuple[logging.Logger, Path, object]:
         """Configura arquivo de log exclusivo para erros, freezes e lentidão do app Python."""
@@ -358,7 +298,7 @@ class NanoBananaApp(ctk.CTk):
         key_btn.grid(row=0, column=2, padx=(0, 20), pady=12, sticky="e")
 
     def _build_controls_panel(self) -> None:
-        """Painel esquerdo com seleção de modelo, resolução, prompt, anexo e pasta de saída."""
+        """Painel esquerdo com seleção de modelo, presets, prompt, multi-turno, referências e saída."""
         panel = ctk.CTkFrame(
             self,
             fg_color=BG_PANEL,
@@ -370,18 +310,18 @@ class NanoBananaApp(ctk.CTk):
         panel.grid(row=1, column=0, padx=(16, 8), pady=16, sticky="nsew")
         panel.grid_propagate(False)
         panel.grid_columnconfigure(0, weight=1)
-        panel.grid_rowconfigure(5, weight=1)
+        panel.grid_rowconfigure(6, weight=1)
 
-        # 1. Modelo (checkboxes mutuamente exclusivos)
+        # 1. Modelo
         ctk.CTkLabel(
             panel,
             text="MODELO",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color=TEXT_MUTED,
-        ).grid(row=0, column=0, padx=18, pady=(16, 6), sticky="w")
+        ).grid(row=0, column=0, padx=18, pady=(14, 4), sticky="w")
 
         model_frame = ctk.CTkFrame(panel, fg_color="transparent")
-        model_frame.grid(row=1, column=0, padx=18, pady=(0, 12), sticky="ew")
+        model_frame.grid(row=1, column=0, padx=18, pady=(0, 10), sticky="ew")
 
         for idx, (key, info) in enumerate(MODELS.items()):
             cb = ctk.CTkCheckBox(
@@ -401,7 +341,7 @@ class NanoBananaApp(ctk.CTk):
 
         # 2. Resolução e Proporção
         res_header = ctk.CTkFrame(panel, fg_color="transparent")
-        res_header.grid(row=2, column=0, padx=18, pady=(4, 6), sticky="ew")
+        res_header.grid(row=2, column=0, padx=18, pady=(2, 4), sticky="ew")
         res_header.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(
@@ -419,7 +359,7 @@ class NanoBananaApp(ctk.CTk):
         ).grid(row=0, column=1, sticky="e")
 
         res_row = ctk.CTkFrame(panel, fg_color="transparent")
-        res_row.grid(row=3, column=0, padx=18, pady=(0, 12), sticky="ew")
+        res_row.grid(row=3, column=0, padx=18, pady=(0, 10), sticky="ew")
         res_row.grid_columnconfigure(3, weight=1)
 
         for idx, res in enumerate(RESOLUTIONS):
@@ -451,13 +391,61 @@ class NanoBananaApp(ctk.CTk):
         )
         aspect_menu.grid(row=0, column=3, sticky="e")
 
-        # 3. Prompt
+        # 3. Prompt + Presets + Expansão (Melhoria 5)
+        prompt_header = ctk.CTkFrame(panel, fg_color="transparent")
+        prompt_header.grid(row=4, column=0, padx=18, pady=(2, 4), sticky="ew")
+        prompt_header.grid_columnconfigure(0, weight=1)
+
         ctk.CTkLabel(
-            panel,
+            prompt_header,
             text="DESCRIÇÃO DA IMAGEM (PROMPT)",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color=TEXT_MUTED,
-        ).grid(row=4, column=0, padx=18, pady=(4, 6), sticky="w")
+        ).grid(row=0, column=0, sticky="w")
+
+        self.expand_prompt_btn = ctk.CTkButton(
+            prompt_header,
+            text="Expandir Prompt",
+            width=116,
+            height=24,
+            fg_color="#252A32",
+            hover_color="#313742",
+            text_color=ACCENT_AMBER,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=self._on_expand_prompt_clicked,
+        )
+        self.expand_prompt_btn.grid(row=0, column=1, sticky="e")
+
+        presets_bar = ctk.CTkFrame(panel, fg_color="transparent")
+        presets_bar.grid(row=5, column=0, padx=18, pady=(0, 6), sticky="ew")
+        presets_bar.grid_columnconfigure(0, weight=1)
+
+        self.preset_menu = ctk.CTkOptionMenu(
+            presets_bar,
+            values=self._preset_menu_values(),
+            variable=self.selected_preset_var,
+            height=28,
+            fg_color=BG_INPUT,
+            button_color="#252A32",
+            button_hover_color="#303640",
+            text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(size=12),
+            command=self._on_preset_selected,
+        )
+        self.preset_menu.grid(row=0, column=0, padx=(0, 6), sticky="ew")
+
+        save_preset_btn = ctk.CTkButton(
+            presets_bar,
+            text="+ Preset",
+            width=76,
+            height=28,
+            fg_color="#252A32",
+            hover_color="#313742",
+            text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(size=11),
+            command=self._save_current_as_preset,
+        )
+        save_preset_btn.grid(row=0, column=1, sticky="e")
 
         self.prompt_box = ctk.CTkTextbox(
             panel,
@@ -468,13 +456,65 @@ class NanoBananaApp(ctk.CTk):
             font=ctk.CTkFont(size=13),
             wrap="word",
         )
-        self.prompt_box.grid(row=5, column=0, padx=18, pady=(0, 12), sticky="nsew")
+        self.prompt_box.grid(row=6, column=0, padx=18, pady=(0, 8), sticky="nsew")
         self.prompt_box.bind("<Control-Return>", self._on_ctrl_enter)
         self.prompt_box.bind("<Control-KP_Enter>", self._on_ctrl_enter)
+        self.prompt_box._textbox.bind("<Control-v>", self._on_paste_shortcut)
+        self.prompt_box._textbox.bind("<Control-V>", self._on_paste_shortcut)
         self.bind("<Control-Return>", self._on_ctrl_enter)
         self.bind("<Control-KP_Enter>", self._on_ctrl_enter)
+        self.bind("<Control-v>", self._on_paste_shortcut)
+        self.bind("<Control-V>", self._on_paste_shortcut)
 
-        # 4. Anexar imagem de referência
+        # 4. Controle Multi-Turno (Melhoria 1)
+        turn_frame = ctk.CTkFrame(
+            panel,
+            fg_color=BG_INPUT,
+            corner_radius=8,
+            border_width=1,
+            border_color=BORDER_SUBTLE,
+        )
+        turn_frame.grid(row=7, column=0, padx=18, pady=(0, 8), sticky="ew")
+        turn_frame.grid_columnconfigure(1, weight=1)
+
+        self.multi_turn_checkbox = ctk.CTkCheckBox(
+            turn_frame,
+            text="Multi-turno",
+            variable=self.multi_turn_var,
+            width=104,
+            fg_color=ACCENT_AMBER,
+            hover_color=ACCENT_AMBER_HOVER,
+            checkmark_color=ACCENT_TEXT,
+            border_color=BORDER_SUBTLE,
+            text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self._update_turn_status_label,
+        )
+        self.multi_turn_checkbox.grid(row=0, column=0, padx=(10, 6), pady=7, sticky="w")
+
+        self.turn_status_label = ctk.CTkLabel(
+            turn_frame,
+            text="Sessão: nova",
+            font=ctk.CTkFont(size=11),
+            text_color=TEXT_MUTED,
+            anchor="w",
+        )
+        self.turn_status_label.grid(row=0, column=1, padx=4, pady=7, sticky="ew")
+
+        self.reset_turn_btn = ctk.CTkButton(
+            turn_frame,
+            text="Nova sessão",
+            width=86,
+            height=24,
+            fg_color="#252A32",
+            hover_color="#313742",
+            text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(size=11),
+            command=self._reset_conversation,
+        )
+        self.reset_turn_btn.grid(row=0, column=2, padx=(4, 8), pady=7, sticky="e")
+
+        # 5. Múltiplas imagens de referência + Colar (Melhoria 3)
         attach_frame = ctk.CTkFrame(
             panel,
             fg_color=BG_INPUT,
@@ -482,51 +522,65 @@ class NanoBananaApp(ctk.CTk):
             border_width=1,
             border_color=BORDER_SUBTLE,
         )
-        attach_frame.grid(row=6, column=0, padx=18, pady=(0, 12), sticky="ew")
-        attach_frame.grid_columnconfigure(1, weight=1)
+        attach_frame.grid(row=8, column=0, padx=18, pady=(0, 10), sticky="ew")
+        attach_frame.grid_columnconfigure(0, weight=1)
 
-        attach_btn = ctk.CTkButton(
-            attach_frame,
-            text="Anexar imagem",
-            width=120,
-            height=30,
+        attach_top = ctk.CTkFrame(attach_frame, fg_color="transparent")
+        attach_top.grid(row=0, column=0, padx=8, pady=(7, 4), sticky="ew")
+        attach_top.grid_columnconfigure(2, weight=1)
+
+        self.attach_btn = ctk.CTkButton(
+            attach_top,
+            text="Anexar imgs (0/4)",
+            width=126,
+            height=28,
             fg_color="#252A32",
             hover_color="#313742",
             text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(size=12),
             command=self._attach_image,
         )
-        attach_btn.grid(row=0, column=0, padx=10, pady=8)
+        self.attach_btn.grid(row=0, column=0, padx=(0, 6))
 
-        self.attach_label = ctk.CTkLabel(
-            attach_frame,
-            text="Nenhuma imagem anexada",
-            font=ctk.CTkFont(size=12),
-            text_color=TEXT_MUTED,
-            anchor="w",
+        paste_btn = ctk.CTkButton(
+            attach_top,
+            text="Colar (Ctrl+V)",
+            width=102,
+            height=28,
+            fg_color="#252A32",
+            hover_color="#313742",
+            text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(size=11),
+            command=self._paste_reference_image,
         )
-        self.attach_label.grid(row=0, column=1, padx=4, pady=8, sticky="ew")
+        paste_btn.grid(row=0, column=1, padx=(0, 6))
 
         self.clear_attach_btn = ctk.CTkButton(
-            attach_frame,
-            text="✕",
-            width=28,
+            attach_top,
+            text="Limpar",
+            width=60,
             height=28,
             fg_color="transparent",
             hover_color="#352024",
             text_color=DANGER_COLOR,
+            font=ctk.CTkFont(size=11),
             command=self._clear_attachment,
         )
+        self.clear_attach_btn.grid(row=0, column=2, sticky="e")
 
-        # 5. Pasta para salvar
+        self.ref_chips_frame = ctk.CTkFrame(attach_frame, fg_color="transparent")
+        self.ref_chips_frame.grid(row=1, column=0, padx=8, pady=(0, 7), sticky="ew")
+
+        # 6. Pasta para salvar
         ctk.CTkLabel(
             panel,
             text="PASTA PARA SALVAR",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color=TEXT_MUTED,
-        ).grid(row=7, column=0, padx=18, pady=(2, 6), sticky="w")
+        ).grid(row=9, column=0, padx=18, pady=(0, 4), sticky="w")
 
         save_row = ctk.CTkFrame(panel, fg_color="transparent")
-        save_row.grid(row=8, column=0, padx=18, pady=(0, 14), sticky="ew")
+        save_row.grid(row=10, column=0, padx=18, pady=(0, 10), sticky="ew")
         save_row.grid_columnconfigure(0, weight=1)
 
         save_entry = ctk.CTkEntry(
@@ -550,18 +604,18 @@ class NanoBananaApp(ctk.CTk):
         )
         browse_btn.grid(row=0, column=1)
 
-        # 6. Botão Gerar + Status
+        # 7. Botão Gerar + Status
         self.generate_btn = ctk.CTkButton(
             panel,
             text="Gerar Imagem (Ctrl+Enter)",
-            height=42,
+            height=40,
             fg_color=ACCENT_AMBER,
             hover_color=ACCENT_AMBER_HOVER,
             text_color=ACCENT_TEXT,
             font=ctk.CTkFont(size=14, weight="bold"),
             command=self._on_generate_clicked,
         )
-        self.generate_btn.grid(row=9, column=0, padx=18, pady=(0, 8), sticky="ew")
+        self.generate_btn.grid(row=11, column=0, padx=18, pady=(0, 6), sticky="ew")
 
         self.status_label = ctk.CTkLabel(
             panel,
@@ -570,10 +624,10 @@ class NanoBananaApp(ctk.CTk):
             text_color=TEXT_MUTED,
             anchor="w",
         )
-        self.status_label.grid(row=10, column=0, padx=18, pady=(0, 14), sticky="ew")
+        self.status_label.grid(row=12, column=0, padx=18, pady=(0, 12), sticky="ew")
 
     def _build_preview_panel(self) -> None:
-        """Painel direito para visualização da imagem gerada e ações de arquivo."""
+        """Painel central para visualização da imagem, metadados e ações de arquivo."""
         preview = ctk.CTkFrame(
             self,
             fg_color=BG_PANEL,
@@ -596,10 +650,23 @@ class NanoBananaApp(ctk.CTk):
             text_color=TEXT_MUTED,
         ).grid(row=0, column=0, sticky="w")
 
+        self.copy_img_btn = ctk.CTkButton(
+            header,
+            text="Copiar imagem",
+            width=112,
+            height=28,
+            fg_color="#252A32",
+            hover_color="#313742",
+            text_color=TEXT_PRIMARY,
+            state="disabled",
+            command=self._copy_current_image,
+        )
+        self.copy_img_btn.grid(row=0, column=1, padx=(0, 8))
+
         self.open_img_btn = ctk.CTkButton(
             header,
             text="Abrir imagem",
-            width=110,
+            width=105,
             height=28,
             fg_color="#252A32",
             hover_color="#313742",
@@ -607,31 +674,31 @@ class NanoBananaApp(ctk.CTk):
             state="disabled",
             command=self._open_last_image,
         )
-        self.open_img_btn.grid(row=0, column=1, padx=(0, 8))
+        self.open_img_btn.grid(row=0, column=2, padx=(0, 8))
 
         self.open_folder_btn = ctk.CTkButton(
             header,
             text="Abrir pasta",
-            width=100,
+            width=95,
             height=28,
             fg_color="#252A32",
             hover_color="#313742",
             text_color=TEXT_PRIMARY,
             command=self._open_output_folder,
         )
-        self.open_folder_btn.grid(row=0, column=2, padx=(0, 8))
+        self.open_folder_btn.grid(row=0, column=3, padx=(0, 8))
 
         self.toggle_log_btn = ctk.CTkButton(
             header,
             text="Mostrar log",
-            width=100,
+            width=95,
             height=28,
             fg_color="#252A32",
             hover_color="#313742",
             text_color=TEXT_PRIMARY,
             command=self._toggle_log,
         )
-        self.toggle_log_btn.grid(row=0, column=3)
+        self.toggle_log_btn.grid(row=0, column=4)
 
         self.preview_container = ctk.CTkFrame(
             preview,
@@ -640,7 +707,7 @@ class NanoBananaApp(ctk.CTk):
             border_width=1,
             border_color=BORDER_SUBTLE,
         )
-        self.preview_container.grid(row=1, column=0, padx=18, pady=(0, 10), sticky="nsew")
+        self.preview_container.grid(row=1, column=0, padx=18, pady=(0, 8), sticky="nsew")
         self.preview_container.grid_columnconfigure(0, weight=1)
         self.preview_container.grid_rowconfigure(0, weight=1)
         self.preview_container.bind("<Configure>", self._on_preview_resize)
@@ -653,6 +720,59 @@ class NanoBananaApp(ctk.CTk):
         )
         self.preview_label.grid(row=0, column=0, padx=12, pady=12, sticky="nsew")
 
+        # Faixa de metadados e restauração rápida (Melhoria 2)
+        self.meta_frame = ctk.CTkFrame(
+            preview,
+            fg_color=BG_INPUT,
+            corner_radius=8,
+            border_width=1,
+            border_color=BORDER_SUBTLE,
+        )
+        self.meta_frame.grid(row=2, column=0, padx=18, pady=(0, 6), sticky="ew")
+        self.meta_frame.grid_columnconfigure(0, weight=1)
+
+        self.meta_info_label = ctk.CTkLabel(
+            self.meta_frame,
+            text="Metadados: selecione ou gere uma imagem para visualizar parâmetros.",
+            font=ctk.CTkFont(size=11),
+            text_color=TEXT_MUTED,
+            anchor="w",
+            justify="left",
+            wraplength=420,
+        )
+        self.meta_info_label.grid(row=0, column=0, padx=10, pady=8, sticky="ew")
+
+        meta_actions = ctk.CTkFrame(self.meta_frame, fg_color="transparent")
+        meta_actions.grid(row=0, column=1, padx=(4, 8), pady=6, sticky="e")
+
+        self.restore_meta_btn = ctk.CTkButton(
+            meta_actions,
+            text="Restaurar Config/Prompt",
+            width=154,
+            height=26,
+            fg_color="#252A32",
+            hover_color="#313742",
+            text_color=TEXT_PRIMARY,
+            font=ctk.CTkFont(size=11),
+            state="disabled",
+            command=self._restore_from_metadata,
+        )
+        self.restore_meta_btn.grid(row=0, column=0, padx=(0, 6))
+
+        self.use_as_ref_btn = ctk.CTkButton(
+            meta_actions,
+            text="Usar como Ref",
+            width=96,
+            height=26,
+            fg_color="#252A32",
+            hover_color="#313742",
+            text_color=ACCENT_AMBER,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            state="disabled",
+            command=self._use_current_as_reference,
+        )
+        self.use_as_ref_btn.grid(row=0, column=1)
+
         self.saved_path_label = ctk.CTkLabel(
             preview,
             text="",
@@ -660,7 +780,7 @@ class NanoBananaApp(ctk.CTk):
             text_color=TEXT_MUTED,
             anchor="w",
         )
-        self.saved_path_label.grid(row=2, column=0, padx=18, pady=(0, 10), sticky="ew")
+        self.saved_path_label.grid(row=3, column=0, padx=18, pady=(0, 8), sticky="ew")
 
         # Painel expansível de log
         self.log_frame = ctk.CTkFrame(
@@ -670,7 +790,7 @@ class NanoBananaApp(ctk.CTk):
             border_width=1,
             border_color=BORDER_SUBTLE,
         )
-        self.log_frame.grid(row=3, column=0, padx=18, pady=(0, 14), sticky="ew")
+        self.log_frame.grid(row=4, column=0, padx=18, pady=(0, 14), sticky="ew")
         self.log_frame.grid_columnconfigure(0, weight=1)
 
         log_header = ctk.CTkFrame(self.log_frame, fg_color="transparent")
@@ -778,6 +898,128 @@ class NanoBananaApp(ctk.CTk):
         for res, cb in self._res_checkboxes.items():
             cb.select() if res == active else cb.deselect()
 
+    # --- Presets e Expansão de Prompt (Melhoria 5) ---
+    def _preset_menu_values(self) -> list[str]:
+        return [PRESET_PLACEHOLDER, *[p["name"] for p in self.presets]]
+
+    def _on_preset_selected(self, choice: str) -> None:
+        if choice == PRESET_PLACEHOLDER:
+            return
+        preset = next((p for p in self.presets if p["name"] == choice), None)
+        if preset is None:
+            self.selected_preset_var.set(PRESET_PLACEHOLDER)
+            return
+        current = self.prompt_box.get("1.0", "end").strip()
+        updated = apply_preset_to_prompt(current, preset["suffix"])
+        self.prompt_box.delete("1.0", "end")
+        self.prompt_box.insert("1.0", updated)
+        self.selected_preset_var.set(PRESET_PLACEHOLDER)
+        self._log(f"Preset aplicado: {preset['name']}")
+
+    def _save_current_as_preset(self) -> None:
+        current = self.prompt_box.get("1.0", "end").strip()
+        if not current:
+            messagebox.showwarning(
+                "Prompt vazio",
+                "Digite o texto/estilo no prompt antes de salvar como preset.",
+            )
+            return
+        dialog = ctk.CTkInputDialog(
+            text="Nome do novo preset (salvará o texto atual do prompt):",
+            title="Salvar Preset",
+        )
+        name = dialog.get_input()
+        if name is None or not name.strip():
+            return
+        try:
+            self.presets = save_preset(name.strip(), current)
+            self.preset_menu.configure(values=self._preset_menu_values())
+            self.selected_preset_var.set(PRESET_PLACEHOLDER)
+            self._log(f"Preset salvo: {name.strip()}")
+            self.status_label.configure(
+                text=f"Preset '{name.strip()}' salvo.",
+                text_color="#6FCF97",
+            )
+        except Exception as exc:
+            messagebox.showerror("Erro ao salvar preset", str(exc))
+
+    def _on_expand_prompt_clicked(self) -> None:
+        if self.is_generating or self.is_expanding:
+            return
+        api_key = self._get_api_key()
+        if not api_key:
+            messagebox.showwarning(
+                "API Key necessária",
+                "Configure sua GEMINI_API_KEY no botão do topo antes de expandir o prompt.",
+            )
+            return
+        raw_prompt = self.prompt_box.get("1.0", "end").strip()
+        if not raw_prompt:
+            messagebox.showwarning("Prompt vazio", "Escreva uma ideia base antes de expandir.")
+            return
+
+        self.is_expanding = True
+        self.expand_prompt_btn.configure(state="disabled", text="Expandindo...")
+        self.status_label.configure(
+            text=f"Refinando prompt via {PROMPT_EXPANDER_MODEL}...",
+            text_color=ACCENT_AMBER,
+        )
+        self._log(f"Expandindo prompt com {PROMPT_EXPANDER_MODEL}...")
+
+        def worker() -> None:
+            try:
+                refined = expand_prompt_with_gemini(api_key, raw_prompt)
+                self._ui_queue.put(lambda text=refined: self._on_expand_success(text))
+            except Exception as exc:
+                self._logger.exception("Falha ao expandir prompt:")
+                self._ui_queue.put(lambda err=str(exc): self._on_expand_error(err))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_expand_success(self, refined_prompt: str) -> None:
+        self.is_expanding = False
+        self.expand_prompt_btn.configure(state="normal", text="Expandir Prompt")
+        self.prompt_box.delete("1.0", "end")
+        self.prompt_box.insert("1.0", refined_prompt)
+        self.status_label.configure(
+            text="Prompt refinado. Revise e clique em Gerar.",
+            text_color="#6FCF97",
+        )
+        self._log("Prompt expandido com sucesso.")
+
+    def _on_expand_error(self, error_msg: str) -> None:
+        self.is_expanding = False
+        self.expand_prompt_btn.configure(state="normal", text="Expandir Prompt")
+        self.status_label.configure(text="Erro ao expandir prompt.", text_color=DANGER_COLOR)
+        self._log(f"ERRO ao expandir prompt: {error_msg}")
+        messagebox.showerror("Erro ao expandir prompt", error_msg)
+
+    # --- Sessão Multi-Turno (Melhoria 1) ---
+    def _update_turn_status_label(self) -> None:
+        if self.current_interaction_id:
+            short_id = f"{self.current_interaction_id[:12]}..."
+            if self.multi_turn_var.get():
+                self.turn_status_label.configure(
+                    text=f"Ativa: {short_id}",
+                    text_color=ACCENT_AMBER,
+                )
+            else:
+                self.turn_status_label.configure(
+                    text=f"Pronta ({short_id})",
+                    text_color=TEXT_MUTED,
+                )
+        else:
+            self.turn_status_label.configure(
+                text="Sessão: nova",
+                text_color=TEXT_MUTED,
+            )
+
+    def _reset_conversation(self) -> None:
+        self.current_interaction_id = None
+        self.multi_turn_var.set(False)
+        self._update_turn_status_label()
+        self._log("Sessão multi-turno resetada. Próxima geração iniciará nova conversa.")
+
     # --- API Key ---
     def _get_api_key(self) -> str:
         load_dotenv(ENV_PATH, override=True)
@@ -803,24 +1045,166 @@ class NanoBananaApp(ctk.CTk):
             os.environ["GEMINI_API_KEY"] = new_key.strip()
             self._refresh_api_key_status()
 
-    # --- Arquivos e anexos ---
+    # --- Arquivos, Múltiplas Referências e Clipboard (Melhoria 3) ---
     def _attach_image(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Selecionar imagem de referência",
+        paths = filedialog.askopenfilenames(
+            title="Selecionar imagens de referência (até 4)",
             filetypes=[("Imagens", "*.png *.jpg *.jpeg *.webp"), ("Todos os arquivos", "*.*")],
         )
-        if not path:
+        if not paths:
             return
-        self.attached_image_path = Path(path)
-        self.attach_label.configure(text=self.attached_image_path.name, text_color=TEXT_PRIMARY)
-        self.clear_attach_btn.grid(row=0, column=2, padx=(0, 8), pady=8)
-        self._log(f"Imagem de referência anexada: {self.attached_image_path}")
+        self._add_reference_paths([Path(p) for p in paths])
+
+    def _add_reference_paths(self, new_paths: list[Path]) -> None:
+        existing = {p.resolve() for p in self.attached_image_paths if p.exists()}
+        added: list[Path] = []
+        skipped_limit = False
+        for raw_path in new_paths:
+            if not raw_path.exists() or not raw_path.is_file():
+                continue
+            resolved = raw_path.resolve()
+            if resolved in existing:
+                continue
+            if len(self.attached_image_paths) >= MAX_REF_IMAGES:
+                skipped_limit = True
+                break
+            self.attached_image_paths.append(raw_path)
+            existing.add(resolved)
+            added.append(raw_path)
+
+        if added:
+            self._render_ref_chips()
+            names = ", ".join(p.name for p in added)
+            self._log(f"Referência(s) adicionada(s): {names}")
+        if skipped_limit:
+            messagebox.showinfo(
+                "Limite de referências",
+                f"Máximo de {MAX_REF_IMAGES} imagens de referência por geração.",
+            )
+
+    def _remove_reference_path(self, target: Path) -> None:
+        self.attached_image_paths = [p for p in self.attached_image_paths if p != target]
+        self._render_ref_chips()
+        self._log(f"Referência removida: {target.name}")
 
     def _clear_attachment(self) -> None:
-        self.attached_image_path = None
-        self.attach_label.configure(text="Nenhuma imagem anexada", text_color=TEXT_MUTED)
-        self.clear_attach_btn.grid_forget()
-        self._log("Imagem de referência removida.")
+        self.attached_image_paths.clear()
+        self._render_ref_chips()
+        self._log("Imagens de referência removidas.")
+
+    def _render_ref_chips(self) -> None:
+        for child in self.ref_chips_frame.winfo_children():
+            child.destroy()
+        self._ref_thumb_refs.clear()
+
+        count = len(self.attached_image_paths)
+        self.attach_btn.configure(text=f"Anexar imgs ({count}/{MAX_REF_IMAGES})")
+        if count > 0:
+            self.clear_attach_btn.configure(state="normal")
+        else:
+            self.clear_attach_btn.configure(state="disabled")
+            ctk.CTkLabel(
+                self.ref_chips_frame,
+                text="Nenhuma referência (até 4 imgs • cole com Ctrl+V)",
+                font=ctk.CTkFont(size=11),
+                text_color=TEXT_MUTED,
+                anchor="w",
+            ).grid(row=0, column=0, sticky="w", padx=2, pady=2)
+            return
+
+        for idx, img_path in enumerate(self.attached_image_paths):
+            chip = ctk.CTkFrame(
+                self.ref_chips_frame,
+                fg_color=BG_PANEL,
+                corner_radius=6,
+                border_width=1,
+                border_color=BORDER_SUBTLE,
+            )
+            chip.grid(row=0, column=idx, padx=(0, 6), pady=2, sticky="w")
+
+            try:
+                with Image.open(img_path) as im:
+                    thumb = im.convert("RGB")
+                    thumb.thumbnail((34, 34))
+                ctk_thumb = ctk.CTkImage(light_image=thumb, dark_image=thumb, size=thumb.size)
+                self._ref_thumb_refs.append(ctk_thumb)
+                ctk.CTkLabel(chip, image=ctk_thumb, text="").grid(
+                    row=0, column=0, padx=(4, 3), pady=3
+                )
+            except Exception:
+                ctk.CTkLabel(chip, text="IMG", font=ctk.CTkFont(size=9)).grid(
+                    row=0, column=0, padx=(6, 3), pady=3
+                )
+
+            short_name = (
+                img_path.name if len(img_path.name) <= 10 else f"{img_path.name[:8]}…"
+            )
+            ctk.CTkLabel(
+                chip,
+                text=short_name,
+                font=ctk.CTkFont(size=10),
+                text_color=TEXT_PRIMARY,
+            ).grid(row=0, column=1, padx=(0, 2))
+
+            ctk.CTkButton(
+                chip,
+                text="✕",
+                width=20,
+                height=20,
+                fg_color="transparent",
+                hover_color="#352024",
+                text_color=DANGER_COLOR,
+                font=ctk.CTkFont(size=10),
+                command=lambda p=img_path: self._remove_reference_path(p),
+            ).grid(row=0, column=2, padx=(0, 3), pady=2)
+
+    def _on_paste_shortcut(self, event=None) -> str | None:
+        """Se houver imagem no clipboard, anexa como referência; caso contrário, mantém colagem de texto."""
+        is_textbox_event = event is not None and event.widget is self.prompt_box._textbox
+        if event is not None and not is_textbox_event:
+            focus_widget = self.focus_get()
+            if focus_widget is self.prompt_box._textbox:
+                return None
+
+        pasted_path = paste_image_from_clipboard(CLIPBOARD_CACHE_DIR)
+        if pasted_path is not None:
+            self._add_reference_paths([pasted_path])
+            self.status_label.configure(
+                text=f"Imagem colada do clipboard: {pasted_path.name}",
+                text_color="#6FCF97",
+            )
+            return "break"
+        return None
+
+    def _paste_reference_image(self) -> None:
+        pasted_path = paste_image_from_clipboard(CLIPBOARD_CACHE_DIR)
+        if pasted_path is None:
+            messagebox.showinfo(
+                "Área de transferência",
+                "Nenhuma imagem válida encontrada na área de transferência.",
+            )
+            return
+        self._add_reference_paths([pasted_path])
+        self.status_label.configure(
+            text=f"Imagem colada: {pasted_path.name}",
+            text_color="#6FCF97",
+        )
+
+    def _copy_current_image(self) -> None:
+        if self.last_pil_image is None:
+            return
+        ok = copy_image_to_clipboard(self.last_pil_image)
+        if ok:
+            self.status_label.configure(
+                text="Imagem copiada para a área de transferência.",
+                text_color="#6FCF97",
+            )
+            self._log("Imagem copiada para a área de transferência.")
+        else:
+            messagebox.showwarning(
+                "Copiar imagem",
+                "Não foi possível copiar a imagem para a área de transferência neste sistema.",
+            )
 
     def _choose_output_dir(self) -> None:
         folder = filedialog.askdirectory(title="Escolher pasta para salvar imagens")
@@ -837,6 +1221,52 @@ class NanoBananaApp(ctk.CTk):
         folder = Path(self.output_dir_var.get().strip() or DEFAULT_OUTPUT_DIR)
         folder.mkdir(parents=True, exist_ok=True)
         os.startfile(str(folder))
+
+    # --- Metadados e Restauração (Melhoria 2) ---
+    def _update_metadata_panel(self, meta: GenerationMetadata | None, has_image: bool) -> None:
+        self.current_metadata = meta
+        self.use_as_ref_btn.configure(state="normal" if has_image else "disabled")
+        if meta is None:
+            self.restore_meta_btn.configure(state="disabled")
+            msg = (
+                "Metadados: não disponíveis nesta imagem (arquivo externo ou anterior)."
+                if has_image
+                else "Metadados: selecione ou gere uma imagem para visualizar parâmetros."
+            )
+            self.meta_info_label.configure(text=msg, text_color=TEXT_MUTED)
+            return
+
+        self.restore_meta_btn.configure(state="normal")
+        self.meta_info_label.configure(
+            text=format_metadata_badge(meta),
+            text_color=TEXT_PRIMARY,
+        )
+
+    def _restore_from_metadata(self) -> None:
+        meta = self.current_metadata
+        if meta is None:
+            return
+        if meta.prompt:
+            self.prompt_box.delete("1.0", "end")
+            self.prompt_box.insert("1.0", meta.prompt)
+        if meta.model_key in MODELS:
+            self._select_model(meta.model_key)
+        if meta.resolution in RESOLUTIONS:
+            self._select_resolution(meta.resolution)
+        if meta.aspect_ratio in ASPECT_RATIOS:
+            self.selected_aspect.set(meta.aspect_ratio)
+        if meta.interaction_id:
+            self.current_interaction_id = meta.interaction_id
+            self._update_turn_status_label()
+        self.status_label.configure(
+            text="Prompt e configurações restaurados dos metadados.",
+            text_color="#6FCF97",
+        )
+        self._log(f"Metadados restaurados (modelo={meta.model_key}, res={meta.resolution}).")
+
+    def _use_current_as_reference(self) -> None:
+        if self.last_generated_path and self.last_generated_path.exists():
+            self._add_reference_paths([self.last_generated_path])
 
     # --- Log ---
     def _toggle_log(self) -> None:
@@ -977,21 +1407,25 @@ class NanoBananaApp(ctk.CTk):
             self._history_items[img_path] = card
 
     def _select_history_image(self, img_path: Path) -> None:
-        """Carrega uma imagem da galeria para o painel de visualização principal."""
+        """Carrega uma imagem da galeria e seus metadados para o painel principal."""
         if not img_path.exists():
             self._refresh_history()
             return
         try:
             with Image.open(img_path) as im:
+                im.load()
                 pil_img = im.copy()
         except Exception as exc:
             self._log(f"ERRO ao abrir imagem da galeria ({img_path.name}): {exc}")
             return
 
+        meta = read_png_metadata(img_path)
         self.last_generated_path = img_path
         self.last_pil_image = pil_img
         self.open_img_btn.configure(state="normal")
+        self.copy_img_btn.configure(state="normal")
         self.saved_path_label.configure(text=f"Visualizando: {img_path}")
+        self._update_metadata_panel(meta, has_image=True)
         self._highlight_history_item(img_path)
         self._render_preview()
         self._log(f"Imagem selecionada na galeria: {img_path.name}")
@@ -1031,7 +1465,8 @@ class NanoBananaApp(ctk.CTk):
         resolution = self.selected_resolution.get()
         aspect_ratio = self.selected_aspect.get()
         out_dir = Path(self.output_dir_var.get().strip() or DEFAULT_OUTPUT_DIR)
-        ref_path = self.attached_image_path
+        ref_paths = list(self.attached_image_paths)
+        prev_inter_id = self.current_interaction_id if self.multi_turn_var.get() else None
 
         self.is_generating = True
         self.generate_btn.configure(state="disabled", text="Gerando...")
@@ -1039,15 +1474,26 @@ class NanoBananaApp(ctk.CTk):
             text=f"Gerando com {model_id} ({resolution}, {aspect_ratio})...",
             text_color=ACCENT_AMBER,
         )
-        ref_info = ref_path.name if ref_path else "nenhuma"
+        ref_info = ", ".join(p.name for p in ref_paths) if ref_paths else "nenhuma"
+        turn_info = prev_inter_id or "nova"
         self._log(
             f"Iniciando geração | modelo={model_id} | res={resolution} | "
-            f"proporção={aspect_ratio} | ref={ref_info}"
+            f"proporção={aspect_ratio} | refs=[{ref_info}] | turno_ant={turn_info}"
         )
 
         worker = threading.Thread(
             target=self._run_generation,
-            args=(api_key, model_id, prompt, resolution, aspect_ratio, out_dir, ref_path),
+            args=(
+                api_key,
+                model_key,
+                model_id,
+                prompt,
+                resolution,
+                aspect_ratio,
+                out_dir,
+                ref_paths,
+                prev_inter_id,
+            ),
             daemon=True,
         )
         worker.start()
@@ -1055,70 +1501,94 @@ class NanoBananaApp(ctk.CTk):
     def _run_generation(
         self,
         api_key: str,
+        model_key: str,
         model_id: str,
         prompt: str,
         resolution: str,
         aspect_ratio: str,
         out_dir: Path,
-        ref_path: Path | None,
+        ref_paths: list[Path],
+        prev_inter_id: str | None,
     ) -> None:
         """Executa a chamada à API em thread separada para não travar a interface."""
         try:
+            import base64
+
             started_at = time.perf_counter()
-            client = genai.Client(api_key=api_key)
-            interaction_input = _build_interaction_input(prompt, ref_path)
             self._log("Enviando requisição para client.interactions.create...")
-            interaction = client.interactions.create(
-                model=model_id,
-                input=interaction_input,
-                response_format={
-                    "type": "image",
-                    "aspect_ratio": aspect_ratio,
-                    "image_size": resolution,
-                },
+            interaction = create_image_interaction(
+                api_key=api_key,
+                model_id=model_id,
+                prompt=prompt,
+                resolution=resolution,
+                aspect_ratio=aspect_ratio,
+                ref_images=ref_paths,
+                previous_interaction_id=prev_inter_id,
             )
             elapsed = time.perf_counter() - started_at
             status = getattr(interaction, "status", "unknown")
-            inter_id = getattr(interaction, "id", "-")
+            inter_id = str(getattr(interaction, "id", "") or "")
             out_text = (getattr(interaction, "output_text", "") or "").strip()
             api_errors = getattr(interaction, "errors", None)
             if api_errors:
                 self._logger.error("API retornou errors (%s): %s", inter_id, api_errors)
-            self._log(f"API concluída em {elapsed:.2f}s | status={status} | id={inter_id}")
+            self._log(f"API concluída em {elapsed:.2f}s | status={status} | id={inter_id or '-'}")
             if out_text:
                 self._log(f"Texto da API: {out_text[:240]}")
-            self._log(_format_usage_summary(interaction, model_id))
+            usage_summary = _format_usage_summary(interaction, model_id)
+            self._log(usage_summary)
 
             output_img = getattr(interaction, "output_image", None)
             if not output_img or not getattr(output_img, "data", None):
                 raise RuntimeError("A API não retornou nenhuma imagem na resposta.")
 
             image_bytes = base64.b64decode(output_img.data)
-            out_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            prefix = next((info["prefix"] for info in MODELS.values() if info["id"] == model_id), "nb")
+            prefix = MODELS.get(model_key, {}).get("prefix", "nb")
             out_path = out_dir / f"nanobanana_{prefix}_{resolution}_{timestamp}.png"
-            out_path.write_bytes(image_bytes)
 
-            with Image.open(BytesIO(image_bytes)) as im:
-                im.load()
-                pil_img = im.copy()
+            meta = GenerationMetadata(
+                prompt=prompt,
+                model_key=model_key,
+                model_id=model_id,
+                resolution=resolution,
+                aspect_ratio=aspect_ratio,
+                interaction_id=inter_id,
+                previous_interaction_id=prev_inter_id,
+                ref_count=len(ref_paths),
+                usage_summary=usage_summary,
+                created_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            pil_img = save_png_with_metadata(image_bytes, out_path, meta)
             self._log(
                 f"Resposta recebida em {elapsed:.2f}s | {pil_img.width}x{pil_img.height}px | "
                 f"{len(image_bytes) / 1024:.1f} KB"
             )
-            self._ui_queue.put(lambda p=out_path, img=pil_img: self._on_generation_success(p, img))
+            self._ui_queue.put(
+                lambda p=out_path, img=pil_img, m=meta: self._on_generation_success(p, img, m)
+            )
         except Exception as exc:
             self._logger.exception("Falha na geração de imagem:")
             self._ui_queue.put(lambda err=str(exc): self._on_generation_error(err))
 
-    def _on_generation_success(self, out_path: Path, pil_img: Image.Image) -> None:
+    def _on_generation_success(
+        self,
+        out_path: Path,
+        pil_img: Image.Image,
+        meta: GenerationMetadata | None = None,
+    ) -> None:
         t0 = time.perf_counter()
         self.is_generating = False
         self.generate_btn.configure(state="normal", text="Gerar Imagem (Ctrl+Enter)")
         self.last_generated_path = out_path
         self.last_pil_image = pil_img
         self.open_img_btn.configure(state="normal")
+        self.copy_img_btn.configure(state="normal")
+
+        if meta and meta.interaction_id:
+            self.current_interaction_id = meta.interaction_id
+        self._update_turn_status_label()
+        self._update_metadata_panel(meta, has_image=True)
 
         self.status_label.configure(text="Imagem gerada com sucesso.", text_color="#6FCF97")
         self.saved_path_label.configure(text=f"Salva em: {out_path}")

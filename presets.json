@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Foto de Produto (Estúdio)",
+    "suffix": "studio product photography, softbox lighting, clean neutral backdrop, sharp focus, 85mm lens, commercial quality",
+    "category": "Fotografia"
+  },
+  {
+    "name": "Cinematográfico 35mm",
+    "suffix": "cinematic 35mm film still, natural depth of field, volumetric atmospheric lighting, color graded, photorealistic",
+    "category": "Fotografia"
+  },
+  {
+    "name": "Ilustração Vetorial Flat",
+    "suffix": "clean flat vector illustration, minimal geometric shapes, balanced color palette, crisp edges, modern editorial style",
+    "category": "Ilustração"
+  },
+  {
+    "name": "Render Arquitetônico",
+    "suffix": "architectural visualization, physically based rendering, natural daylight, realistic materials, wide angle lens",
+    "category": "3D & Render"
+  },
+  {
+    "name": "Conceito Isométrico 3D",
+    "suffix": "isometric 3D diorama render, soft global illumination, clean clay and matte textures, studio background",
+    "category": "3D & Render"
+  }
+]
