@@ -15,7 +15,7 @@ Created by **JZ DEV**
 
 **BananaForge** is a lightweight desktop workstation for generating and editing images using Google AI Studio's **Nano Banana** family of Gemini image models via the official `google-genai` Interactions API (`client.interactions.create`).
 
-Instead of relying on a browser tab, BananaForge gives you a responsive dark-mode studio interface on Windows (and cross-platform Python environments) with local file saving, reference-image editing, a clickable output gallery, token & cost tracking, and built-in freeze/crash diagnostics.
+Instead of relying on a browser tab, BananaForge gives you a responsive dark-mode studio interface on Windows (and cross-platform Python environments) with local file saving, multi-turn conversational editing, multi-reference inputs, embedded PNG metadata, prompt presets, a clickable output gallery, token & cost tracking, and built-in freeze/crash diagnostics.
 
 ---
 
@@ -37,10 +37,14 @@ BananaForge supports all 5 Nano Banana image models available in Google AI Studi
 
 ## Key Features
 
-- **Text-to-Image & Image-to-Image:** Generate images from prompts or attach a reference image (`PNG`, `JPG`, `JPEG`, `WEBP`) for style transfer, sketch conversion, and targeted edits.
+- **Text-to-Image & Multi-Reference Editing:** Generate images from prompts or attach up to **4 reference images** (`PNG`, `JPG`, `JPEG`, `WEBP`) with removable thumbnail chips.
+- **Multi-Turn Conversational Editing:** Toggle **Multi-turno** to iterate on the current image using `previous_interaction_id`, or click **Nova sessão** to start fresh.
+- **Embedded PNG Metadata & Restoration:** Saves generation parameters (prompt, model, resolution, aspect ratio, interaction ID, and usage) inside PNG `tEXt` chunks (`bananaforge_meta`), with one-click **Restaurar Config/Prompt** and **Usar como Ref** actions when viewing generated or history images.
+- **Clipboard Integration:** Paste images or image files directly with `Ctrl+V` (or **Colar (Ctrl+V)**) as references, and copy the current preview to the Windows clipboard with **Copiar imagem**.
+- **Prompt Presets & AI Expansion:** Apply or save custom style presets in `presets.json` (**+ Preset**), and optionally refine/translate prompts using `gemini-3.1-flash-lite` (**Expandir Prompt**).
 - **Resolution & Aspect Ratio Controls:** Choose between `1K`, `2K`, and `4K` resolutions and `1:1`, `16:9`, `9:16`, `4:3`, `3:4` aspect ratios.
 - **Clickable History Gallery:** Automatically scans your output folder (`~/Pictures/NanoBanana` by default) and renders cached thumbnails in a right-hand gallery panel.
-- **Live Token & Cost Summary:** Logs input, output, and thought tokens alongside estimated cost in **BRL (R$)** and **USD (US$)** capped at 2 decimal places.
+- **Live Token & Cost Summary:** Logs input, output, and thought tokens alongside estimated cost in **BRL (R$)** and **USD (US$)** rounded to 2 decimal places.
 - **Fast Workflow Shortcuts:** Press `Ctrl+Enter` inside the prompt box to generate immediately.
 - **Built-in API Key Manager:** Configure or update your `GEMINI_API_KEY` directly from the top bar (saved locally in `.env`, excluded from Git).
 - **Non-Blocking UI & Diagnostics:** Uses a thread-safe `queue.SimpleQueue` bridge, `faulthandler` crash dumps, and a `FreezeWatchdog` thread logging Python app diagnostics to `logs/app_errors_*.log`, plus a standalone `diagnose.py` benchmark script.
@@ -51,14 +55,20 @@ BananaForge supports all 5 Nano Banana image models available in Google AI Studi
 
 ```text
 bananaforge/
-├── app.py              # Main CustomTkinter desktop app, Gemini API worker & UI queue
-├── diagnose.py         # UI performance benchmark & Python error log inspector
-├── requirements.txt    # Pinned Python dependencies (google-genai, customtkinter, pillow, python-dotenv)
-├── .env.example        # Template for your GEMINI_API_KEY (copy to .env)
-├── .gitignore          # Excludes .env, .venv/, logs/, output/, __pycache__/
-├── launch.vbs          # Silent Windows launcher (pythonw.exe)
-├── run.bat             # Windows batch launcher
-└── LICENSE             # MIT License (JZ DEV)
+├── app.py                # Main CustomTkinter desktop UI, thread bridge & history gallery
+├── genai_service.py      # Gemini Interactions API client, multi-turn, multi-ref & prompt expansion
+├── metadata_utils.py     # Embedded PNG metadata read/write (PIL PngInfo)
+├── presets_manager.py    # Modular prompt presets CRUD (presets.json)
+├── clipboard_utils.py    # Clipboard image paste (ImageGrab) & Windows CF_DIB copy
+├── presets.json          # Default and user-saved prompt presets
+├── diagnose.py           # UI performance benchmark & Python error log inspector
+├── tests/                # Unit test suite (unittest with mocked API & clipboard)
+├── requirements.txt      # Pinned Python dependencies (google-genai, customtkinter, pillow, python-dotenv)
+├── .env.example          # Template for your GEMINI_API_KEY (copy to .env)
+├── .gitignore            # Excludes .env, .venv/, logs/, output/, __pycache__/
+├── launch.vbs            # Silent Windows launcher (pythonw.exe)
+├── run.bat               # Windows batch launcher
+└── LICENSE               # MIT License (JZ DEV)
 ```
 
 ---
@@ -105,7 +115,13 @@ bananaforge/
 
 ---
 
-## Diagnostics & Benchmarking
+## Diagnostics & Testing
+
+To run the unit test suite (using mocked Gemini API and clipboard calls):
+
+```bash
+python -m unittest discover -s tests -v
+```
 
 If you want to verify UI responsiveness or inspect Python runtime logs:
 
