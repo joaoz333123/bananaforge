@@ -1,4 +1,4 @@
-BananaForge Ethical & Responsible Use License
+MIT License
 
 Copyright (c) 2026 JZ DEV (João Zanetti)
 
@@ -6,30 +6,16 @@ Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
 to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, subject to the following conditions:
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-1. Attribution:
-   The above copyright notice, author credit ("JZ DEV"), and this permission
-   notice shall be included in all copies or substantial portions of the Software.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-2. Ethical & Responsible Use Condition:
-   The Software may be used for any personal, educational, research, or
-   commercial purpose, PROVIDED THAT such use does not violate:
-   (a) Applicable laws, human rights, or fundamental ethical standards;
-   (b) Platform safety and acceptable use policies, including the Google
-       Generative AI Prohibited Use Policy and Google AI Studio Terms of Service;
-   (c) Restrictions against generating or distributing non-consensual intimate
-       imagery, child sexual abuse material (CSAM), hate speech, harassment,
-       deceptive deepfakes, fraud, malware, or content intended to cause harm.
-
-   Any use in violation of Section 2 automatically terminates the rights
-   granted under this License.
-
-3. Disclaimer:
-   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-   SOFTWARE.
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

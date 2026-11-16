@@ -7,7 +7,7 @@ Created by **JZ DEV**
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Google GenAI SDK](https://img.shields.io/badge/Google%20GenAI%20SDK-3.3.0-4285F4?logo=google&logoColor=white)](https://ai.google.dev/)
 [![CustomTkinter](https://img.shields.io/badge/UI-CustomTkinter-E5A93C)](https://github.com/TomSchimansky/CustomTkinter)
-[![License](https://img.shields.io/badge/License-Ethical%20Use-2EA44F)](./LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-2EA44F)](./LICENSE)
 
 ---
 
@@ -58,7 +58,7 @@ bananaforge/
 ├── .gitignore          # Excludes .env, .venv/, logs/, output/, __pycache__/
 ├── launch.vbs          # Silent Windows launcher (pythonw.exe)
 ├── run.bat             # Windows batch launcher
-└── LICENSE             # Ethical & Responsible Use License (JZ DEV)
+└── LICENSE             # MIT License (JZ DEV)
 ```
 
 ---
@@ -136,5 +136,9 @@ Developed by **JZ DEV** (João Zanetti).
 
 ## License
 
-This project is licensed under the **BananaForge Ethical & Responsible Use License** — see the [LICENSE](./LICENSE) file for details.  
-You are free to use, modify, fork, and distribute this software for personal or commercial projects, provided your usage complies with ethical standards and applicable AI safety policies.
+This project is licensed under the **MIT License** — see the [LICENSE](./LICENSE) file for details.  
+You are free to use, modify, fork, and distribute this software for personal or commercial projects while keeping the original copyright attribution (**JZ DEV**).
+
+### Responsible Use
+
+While the source code is licensed under MIT, image generation requests made through this client are subject to Google's [Generative AI Prohibited Use Policy](https://policies.google.com/terms/generative-ai/use-policy) and [Google AI Studio Terms of Service](https://ai.google.dev/gemini-api/terms). Please use the tool ethically and responsibly.
