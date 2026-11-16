@@ -47,11 +47,24 @@ MODEL_PRICING_USD_PER_1M = {
     "gemini-2.5-flash-image": {"input": 0.30, "output": 30.00},
 }
 USD_TO_BRL = 5.70
-PROMPT_EXPANDER_MODEL = "gemini-3.1-flash-lite"
+PROMPT_EXPANDER_MODEL = MODELS["2_lite"]["id"]
 
 
 def detect_mime_type(file_path: Path) -> str:
-    """Detecta o MIME type da imagem anexada."""
+    """Detecta o MIME type real da imagem (inspecionando bytes via PIL antes da extensão)."""
+    try:
+        from PIL import Image
+
+        with Image.open(file_path) as im:
+            fmt = (im.format or "").upper()
+            if fmt == "PNG":
+                return "image/png"
+            if fmt in {"JPEG", "JPG"}:
+                return "image/jpeg"
+            if fmt == "WEBP":
+                return "image/webp"
+    except Exception:
+        pass
     mime, _ = mimetypes.guess_type(str(file_path))
     if mime and mime.startswith("image/"):
         return mime
@@ -83,21 +96,51 @@ def format_api_response(interaction: object) -> str:
     return json.dumps(sanitize_for_log(raw), indent=2, ensure_ascii=False, default=str)
 
 
+def compute_interaction_cost(interaction: object, model_id: str) -> dict[str, float | int]:
+    """Extrai contagem de tokens e custo estimado em USD e BRL de uma interação."""
+    usage = getattr(interaction, "usage", None)
+    if usage is None:
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "thought_tokens": 0,
+            "total_tokens": 0,
+            "usd_cost": 0.0,
+            "brl_cost": 0.0,
+        }
+
+    in_tok = int(getattr(usage, "total_input_tokens", None) or 0)
+    out_tok = int(getattr(usage, "total_output_tokens", None) or 0)
+    thought_tok = int(getattr(usage, "total_thought_tokens", None) or 0)
+    api_total = int(getattr(usage, "total_tokens", None) or 0)
+    total_consumed = (in_tok + out_tok) or api_total
+
+    pricing = MODEL_PRICING_USD_PER_1M.get(model_id, {"input": 0.0, "output": 0.0})
+    usd_cost = (in_tok / 1_000_000) * pricing["input"] + (out_tok / 1_000_000) * pricing["output"]
+    brl_cost = usd_cost * USD_TO_BRL
+    return {
+        "input_tokens": in_tok,
+        "output_tokens": out_tok,
+        "thought_tokens": thought_tok,
+        "total_tokens": total_consumed,
+        "usd_cost": round(usd_cost, 6),
+        "brl_cost": round(brl_cost, 6),
+    }
+
+
 def format_usage_summary(interaction: object, model_id: str) -> str:
     """Calcula o total de tokens (input + output) e o custo aproximado em BRL."""
     usage = getattr(interaction, "usage", None)
     if usage is None:
         return "Tokens consumidos: indisponível (API não retornou usage) | Valor aprox.: R$ --"
 
-    in_tok = getattr(usage, "total_input_tokens", None) or 0
-    out_tok = getattr(usage, "total_output_tokens", None) or 0
-    thought_tok = getattr(usage, "total_thought_tokens", None) or 0
-    api_total = getattr(usage, "total_tokens", None) or 0
-    total_consumed = (in_tok + out_tok) or api_total
-
-    pricing = MODEL_PRICING_USD_PER_1M.get(model_id, {"input": 0.0, "output": 0.0})
-    usd_cost = (in_tok / 1_000_000) * pricing["input"] + (out_tok / 1_000_000) * pricing["output"]
-    brl_cost = usd_cost * USD_TO_BRL
+    cost_info = compute_interaction_cost(interaction, model_id)
+    in_tok = int(cost_info["input_tokens"])
+    out_tok = int(cost_info["output_tokens"])
+    thought_tok = int(cost_info["thought_tokens"])
+    total_consumed = int(cost_info["total_tokens"])
+    usd_cost = float(cost_info["usd_cost"])
+    brl_cost = float(cost_info["brl_cost"])
     brl_str = f"{brl_cost:.2f}".replace(".", ",")
 
     extra = f" | thought: {thought_tok}" if thought_tok else ""
@@ -143,6 +186,7 @@ def create_image_interaction(
     aspect_ratio: str,
     ref_images: Sequence[Path] | Path | None = None,
     previous_interaction_id: str | None = None,
+    fallback_image_path: Path | None = None,
 ) -> object:
     """Executa client.interactions.create com suporte a múltiplas referências e multi-turno."""
     client = genai.Client(api_key=api_key)
@@ -158,7 +202,28 @@ def create_image_interaction(
     }
     if previous_interaction_id:
         kwargs["previous_interaction_id"] = previous_interaction_id
-    return client.interactions.create(**kwargs)
+    try:
+        return client.interactions.create(**kwargs)
+    except Exception as exc:
+        if (
+            previous_interaction_id
+            and "thought block" in str(exc).lower()
+            and fallback_image_path is not None
+            and fallback_image_path.exists()
+        ):
+            existing_refs = (
+                [ref_images]
+                if isinstance(ref_images, Path)
+                else [p for p in (ref_images or []) if p is not None]
+            )
+            fallback_refs = [
+                fallback_image_path,
+                *[p for p in existing_refs if p.resolve() != fallback_image_path.resolve()],
+            ][:4]
+            kwargs["input"] = build_interaction_input(prompt, fallback_refs)
+            kwargs.pop("previous_interaction_id", None)
+            return client.interactions.create(**kwargs)
+        raise
 
 
 def _extract_text_from_interaction(interaction: object) -> str:

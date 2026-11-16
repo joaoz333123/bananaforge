@@ -9,10 +9,14 @@ import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
+from PIL import Image
+
 from genai_service import (
     PROMPT_EXPANDER_MODEL,
     build_interaction_input,
+    compute_interaction_cost,
     create_image_interaction,
+    detect_mime_type,
     expand_prompt_with_gemini,
 )
 
@@ -98,6 +102,54 @@ class TestGenaiService(unittest.TestCase):
         _, kwargs = mock_client.interactions.create.call_args
         self.assertEqual(kwargs["model"], PROMPT_EXPANDER_MODEL)
         self.assertIn("coffee cup", kwargs["input"])
+
+    def test_detect_mime_type_reads_actual_image_format(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake_png = Path(tmp) / "mislabeled.png"
+            Image.new("RGB", (8, 8), "#112233").save(fake_png, format="JPEG")
+            self.assertEqual(detect_mime_type(fake_png), "image/jpeg")
+
+    def test_compute_interaction_cost(self) -> None:
+        inter = SimpleNamespace(
+            usage=SimpleNamespace(
+                total_input_tokens=1000,
+                total_output_tokens=1100,
+                total_thought_tokens=200,
+                total_tokens=2300,
+            )
+        )
+        cost = compute_interaction_cost(inter, "gemini-3.1-flash-lite-image")
+        self.assertEqual(cost["input_tokens"], 1000)
+        self.assertEqual(cost["output_tokens"], 1100)
+        self.assertGreater(cost["brl_cost"], 0.0)
+
+    @patch("genai_service.genai.Client")
+    def test_create_image_interaction_fallbacks_on_thought_block_error(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        mock_client = mock_client_cls.return_value
+        mock_client.interactions.create.side_effect = [
+            RuntimeError("Model turns with images must start with a thought block"),
+            SimpleNamespace(id="inter_fallback_ok"),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            prev_img = Path(tmp) / "prev.png"
+            Image.new("RGB", (8, 8), "#112233").save(prev_img, format="PNG")
+            res = create_image_interaction(
+                api_key="test-key",
+                model_id="gemini-3.1-flash-lite-image",
+                prompt="add grain",
+                resolution="1K",
+                aspect_ratio="1:1",
+                ref_images=[],
+                previous_interaction_id="inter_no_thought",
+                fallback_image_path=prev_img,
+            )
+        self.assertEqual(res.id, "inter_fallback_ok")
+        self.assertEqual(mock_client.interactions.create.call_count, 2)
+        _, retry_kwargs = mock_client.interactions.create.call_args
+        self.assertNotIn("previous_interaction_id", retry_kwargs)
+        self.assertIsInstance(retry_kwargs["input"], list)
 
 
 if __name__ == "__main__":

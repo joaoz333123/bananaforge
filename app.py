@@ -25,12 +25,10 @@ from clipboard_utils import copy_image_to_clipboard, paste_image_from_clipboard
 from genai_service import (
     MODEL_PRICING_USD_PER_1M,
     MODELS,
-    PROMPT_EXPANDER_MODEL,
     USD_TO_BRL,
     build_interaction_input as _build_interaction_input,
     create_image_interaction,
     detect_mime_type as _detect_mime_type,
-    expand_prompt_with_gemini,
     format_api_response as _format_api_response,
     format_usage_summary as _format_usage_summary,
     sanitize_for_log as _sanitize_for_log,
@@ -63,6 +61,7 @@ DANGER_COLOR = "#D9534F"
 
 RESOLUTIONS = ["1K", "2K", "4K"]
 ASPECT_RATIOS = ["1:1", "16:9", "9:16", "4:3", "3:4"]
+BATCH_OPTIONS = ["1x", "2x", "3x", "4x"]
 MAX_REF_IMAGES = 4
 PRESET_PLACEHOLDER = "Aplicar preset..."
 
@@ -99,6 +98,7 @@ class NanoBananaApp(ctk.CTk):
         self.selected_model_key = ctk.StringVar(value="2.1")
         self.selected_resolution = ctk.StringVar(value="2K")
         self.selected_aspect = ctk.StringVar(value="1:1")
+        self.selected_batch = ctk.StringVar(value="1x")
         self.output_dir_var = ctk.StringVar(value=str(DEFAULT_OUTPUT_DIR))
         self.api_key_status_var = ctk.StringVar()
         self.multi_turn_var = ctk.BooleanVar(value=False)
@@ -112,7 +112,6 @@ class NanoBananaApp(ctk.CTk):
         self.last_pil_image: Image.Image | None = None
         self.preview_ctk_image: ctk.CTkImage | None = None
         self.is_generating = False
-        self.is_expanding = False
         self.log_visible = False
 
         self._model_checkboxes: dict[str, ctk.CTkCheckBox] = {}
@@ -339,7 +338,7 @@ class NanoBananaApp(ctk.CTk):
             self._model_checkboxes[key] = cb
         self._sync_model_checkboxes()
 
-        # 2. Resolução e Proporção
+        # 2. Resolução, Proporção e Lote
         res_header = ctk.CTkFrame(panel, fg_color="transparent")
         res_header.grid(row=2, column=0, padx=18, pady=(2, 4), sticky="ew")
         res_header.grid_columnconfigure(0, weight=1)
@@ -356,7 +355,14 @@ class NanoBananaApp(ctk.CTk):
             text="PROPORÇÃO",
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color=TEXT_MUTED,
-        ).grid(row=0, column=1, sticky="e")
+        ).grid(row=0, column=1, padx=(0, 12), sticky="e")
+
+        ctk.CTkLabel(
+            res_header,
+            text="LOTE",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color=TEXT_MUTED,
+        ).grid(row=0, column=2, sticky="e")
 
         res_row = ctk.CTkFrame(panel, fg_color="transparent")
         res_row.grid(row=3, column=0, padx=18, pady=(0, 10), sticky="ew")
@@ -366,7 +372,7 @@ class NanoBananaApp(ctk.CTk):
             cb = ctk.CTkCheckBox(
                 res_row,
                 text=res,
-                width=64,
+                width=58,
                 fg_color=ACCENT_AMBER,
                 hover_color=ACCENT_AMBER_HOVER,
                 checkmark_color=ACCENT_TEXT,
@@ -375,7 +381,7 @@ class NanoBananaApp(ctk.CTk):
                 font=ctk.CTkFont(size=13),
                 command=lambda r=res: self._select_resolution(r),
             )
-            cb.grid(row=0, column=idx, padx=(0, 8), sticky="w")
+            cb.grid(row=0, column=idx, padx=(0, 6), sticky="w")
             self._res_checkboxes[res] = cb
         self._sync_res_checkboxes()
 
@@ -383,15 +389,27 @@ class NanoBananaApp(ctk.CTk):
             res_row,
             values=ASPECT_RATIOS,
             variable=self.selected_aspect,
-            width=96,
+            width=76,
             fg_color=BG_INPUT,
             button_color="#252A32",
             button_hover_color="#303640",
             text_color=TEXT_PRIMARY,
         )
-        aspect_menu.grid(row=0, column=3, sticky="e")
+        aspect_menu.grid(row=0, column=3, padx=(0, 6), sticky="e")
 
-        # 3. Prompt + Presets + Expansão (Melhoria 5)
+        batch_menu = ctk.CTkOptionMenu(
+            res_row,
+            values=BATCH_OPTIONS,
+            variable=self.selected_batch,
+            width=64,
+            fg_color=BG_INPUT,
+            button_color="#252A32",
+            button_hover_color="#303640",
+            text_color=TEXT_PRIMARY,
+        )
+        batch_menu.grid(row=0, column=4, sticky="e")
+
+        # 3. Prompt + Presets (Melhoria 5)
         prompt_header = ctk.CTkFrame(panel, fg_color="transparent")
         prompt_header.grid(row=4, column=0, padx=18, pady=(2, 4), sticky="ew")
         prompt_header.grid_columnconfigure(0, weight=1)
@@ -402,19 +420,6 @@ class NanoBananaApp(ctk.CTk):
             font=ctk.CTkFont(size=11, weight="bold"),
             text_color=TEXT_MUTED,
         ).grid(row=0, column=0, sticky="w")
-
-        self.expand_prompt_btn = ctk.CTkButton(
-            prompt_header,
-            text="Expandir Prompt",
-            width=116,
-            height=24,
-            fg_color="#252A32",
-            hover_color="#313742",
-            text_color=ACCENT_AMBER,
-            font=ctk.CTkFont(size=11, weight="bold"),
-            command=self._on_expand_prompt_clicked,
-        )
-        self.expand_prompt_btn.grid(row=0, column=1, sticky="e")
 
         presets_bar = ctk.CTkFrame(panel, fg_color="transparent")
         presets_bar.grid(row=5, column=0, padx=18, pady=(0, 6), sticky="ew")
@@ -943,57 +948,6 @@ class NanoBananaApp(ctk.CTk):
         except Exception as exc:
             messagebox.showerror("Erro ao salvar preset", str(exc))
 
-    def _on_expand_prompt_clicked(self) -> None:
-        if self.is_generating or self.is_expanding:
-            return
-        api_key = self._get_api_key()
-        if not api_key:
-            messagebox.showwarning(
-                "API Key necessária",
-                "Configure sua GEMINI_API_KEY no botão do topo antes de expandir o prompt.",
-            )
-            return
-        raw_prompt = self.prompt_box.get("1.0", "end").strip()
-        if not raw_prompt:
-            messagebox.showwarning("Prompt vazio", "Escreva uma ideia base antes de expandir.")
-            return
-
-        self.is_expanding = True
-        self.expand_prompt_btn.configure(state="disabled", text="Expandindo...")
-        self.status_label.configure(
-            text=f"Refinando prompt via {PROMPT_EXPANDER_MODEL}...",
-            text_color=ACCENT_AMBER,
-        )
-        self._log(f"Expandindo prompt com {PROMPT_EXPANDER_MODEL}...")
-
-        def worker() -> None:
-            try:
-                refined = expand_prompt_with_gemini(api_key, raw_prompt)
-                self._ui_queue.put(lambda text=refined: self._on_expand_success(text))
-            except Exception as exc:
-                self._logger.exception("Falha ao expandir prompt:")
-                self._ui_queue.put(lambda err=str(exc): self._on_expand_error(err))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-    def _on_expand_success(self, refined_prompt: str) -> None:
-        self.is_expanding = False
-        self.expand_prompt_btn.configure(state="normal", text="Expandir Prompt")
-        self.prompt_box.delete("1.0", "end")
-        self.prompt_box.insert("1.0", refined_prompt)
-        self.status_label.configure(
-            text="Prompt refinado. Revise e clique em Gerar.",
-            text_color="#6FCF97",
-        )
-        self._log("Prompt expandido com sucesso.")
-
-    def _on_expand_error(self, error_msg: str) -> None:
-        self.is_expanding = False
-        self.expand_prompt_btn.configure(state="normal", text="Expandir Prompt")
-        self.status_label.configure(text="Erro ao expandir prompt.", text_color=DANGER_COLOR)
-        self._log(f"ERRO ao expandir prompt: {error_msg}")
-        messagebox.showerror("Erro ao expandir prompt", error_msg)
-
     # --- Sessão Multi-Turno (Melhoria 1) ---
     def _update_turn_status_label(self) -> None:
         if self.current_interaction_id:
@@ -1464,21 +1418,26 @@ class NanoBananaApp(ctk.CTk):
         model_id = MODELS[model_key]["id"]
         resolution = self.selected_resolution.get()
         aspect_ratio = self.selected_aspect.get()
+        batch_count = max(1, min(4, int(self.selected_batch.get().rstrip("x") or "1")))
         out_dir = Path(self.output_dir_var.get().strip() or DEFAULT_OUTPUT_DIR)
         ref_paths = list(self.attached_image_paths)
         prev_inter_id = self.current_interaction_id if self.multi_turn_var.get() else None
+        fallback_path = self.last_generated_path if prev_inter_id else None
 
         self.is_generating = True
-        self.generate_btn.configure(state="disabled", text="Gerando...")
+        self.generate_btn.configure(
+            state="disabled",
+            text=f"Gerando lote ({batch_count}x)..." if batch_count > 1 else "Gerando...",
+        )
         self.status_label.configure(
-            text=f"Gerando com {model_id} ({resolution}, {aspect_ratio})...",
+            text=f"Gerando {batch_count}x com {model_id} ({resolution}, {aspect_ratio})...",
             text_color=ACCENT_AMBER,
         )
         ref_info = ", ".join(p.name for p in ref_paths) if ref_paths else "nenhuma"
         turn_info = prev_inter_id or "nova"
         self._log(
             f"Iniciando geração | modelo={model_id} | res={resolution} | "
-            f"proporção={aspect_ratio} | refs=[{ref_info}] | turno_ant={turn_info}"
+            f"proporção={aspect_ratio} | lote={batch_count}x | refs=[{ref_info}] | turno_ant={turn_info}"
         )
 
         worker = threading.Thread(
@@ -1490,9 +1449,11 @@ class NanoBananaApp(ctk.CTk):
                 prompt,
                 resolution,
                 aspect_ratio,
+                batch_count,
                 out_dir,
                 ref_paths,
                 prev_inter_id,
+                fallback_path,
             ),
             daemon=True,
         )
@@ -1506,67 +1467,78 @@ class NanoBananaApp(ctk.CTk):
         prompt: str,
         resolution: str,
         aspect_ratio: str,
+        batch_count: int,
         out_dir: Path,
         ref_paths: list[Path],
         prev_inter_id: str | None,
+        fallback_path: Path | None = None,
     ) -> None:
         """Executa a chamada à API em thread separada para não travar a interface."""
         try:
             import base64
 
-            started_at = time.perf_counter()
-            self._log("Enviando requisição para client.interactions.create...")
-            interaction = create_image_interaction(
-                api_key=api_key,
-                model_id=model_id,
-                prompt=prompt,
-                resolution=resolution,
-                aspect_ratio=aspect_ratio,
-                ref_images=ref_paths,
-                previous_interaction_id=prev_inter_id,
-            )
-            elapsed = time.perf_counter() - started_at
-            status = getattr(interaction, "status", "unknown")
-            inter_id = str(getattr(interaction, "id", "") or "")
-            out_text = (getattr(interaction, "output_text", "") or "").strip()
-            api_errors = getattr(interaction, "errors", None)
-            if api_errors:
-                self._logger.error("API retornou errors (%s): %s", inter_id, api_errors)
-            self._log(f"API concluída em {elapsed:.2f}s | status={status} | id={inter_id or '-'}")
-            if out_text:
-                self._log(f"Texto da API: {out_text[:240]}")
-            usage_summary = _format_usage_summary(interaction, model_id)
-            self._log(usage_summary)
-
-            output_img = getattr(interaction, "output_image", None)
-            if not output_img or not getattr(output_img, "data", None):
-                raise RuntimeError("A API não retornou nenhuma imagem na resposta.")
-
-            image_bytes = base64.b64decode(output_img.data)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             prefix = MODELS.get(model_key, {}).get("prefix", "nb")
-            out_path = out_dir / f"nanobanana_{prefix}_{resolution}_{timestamp}.png"
+            for idx in range(batch_count):
+                started_at = time.perf_counter()
+                if batch_count > 1:
+                    self._log(f"Lote [{idx + 1}/{batch_count}] enviando requisição...")
+                else:
+                    self._log("Enviando requisição para client.interactions.create...")
+                interaction = create_image_interaction(
+                    api_key=api_key,
+                    model_id=model_id,
+                    prompt=prompt,
+                    resolution=resolution,
+                    aspect_ratio=aspect_ratio,
+                    ref_images=ref_paths,
+                    previous_interaction_id=prev_inter_id,
+                    fallback_image_path=fallback_path,
+                )
+                elapsed = time.perf_counter() - started_at
+                status = getattr(interaction, "status", "unknown")
+                inter_id = str(getattr(interaction, "id", "") or "")
+                out_text = (getattr(interaction, "output_text", "") or "").strip()
+                api_errors = getattr(interaction, "errors", None)
+                if api_errors:
+                    self._logger.error("API retornou errors (%s): %s", inter_id, api_errors)
+                self._log(f"API concluída em {elapsed:.2f}s | status={status} | id={inter_id or '-'}")
+                if out_text:
+                    self._log(f"Texto da API: {out_text[:240]}")
+                usage_summary = _format_usage_summary(interaction, model_id)
+                self._log(usage_summary)
 
-            meta = GenerationMetadata(
-                prompt=prompt,
-                model_key=model_key,
-                model_id=model_id,
-                resolution=resolution,
-                aspect_ratio=aspect_ratio,
-                interaction_id=inter_id,
-                previous_interaction_id=prev_inter_id,
-                ref_count=len(ref_paths),
-                usage_summary=usage_summary,
-                created_at=datetime.now().isoformat(timespec="seconds"),
-            )
-            pil_img = save_png_with_metadata(image_bytes, out_path, meta)
-            self._log(
-                f"Resposta recebida em {elapsed:.2f}s | {pil_img.width}x{pil_img.height}px | "
-                f"{len(image_bytes) / 1024:.1f} KB"
-            )
-            self._ui_queue.put(
-                lambda p=out_path, img=pil_img, m=meta: self._on_generation_success(p, img, m)
-            )
+                output_img = getattr(interaction, "output_image", None)
+                if not output_img or not getattr(output_img, "data", None):
+                    raise RuntimeError("A API não retornou nenhuma imagem na resposta.")
+
+                image_bytes = base64.b64decode(output_img.data)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                suffix = f"_{idx + 1}" if batch_count > 1 else ""
+                out_path = out_dir / f"nanobanana_{prefix}_{resolution}_{timestamp}{suffix}.png"
+
+                meta = GenerationMetadata(
+                    prompt=prompt,
+                    model_key=model_key,
+                    model_id=model_id,
+                    resolution=resolution,
+                    aspect_ratio=aspect_ratio,
+                    interaction_id=inter_id,
+                    previous_interaction_id=prev_inter_id,
+                    ref_count=len(ref_paths),
+                    usage_summary=usage_summary,
+                    created_at=datetime.now().isoformat(timespec="seconds"),
+                )
+                pil_img = save_png_with_metadata(image_bytes, out_path, meta)
+                self._log(
+                    f"Resposta recebida em {elapsed:.2f}s | {pil_img.width}x{pil_img.height}px | "
+                    f"{len(image_bytes) / 1024:.1f} KB"
+                )
+                is_final = idx == batch_count - 1
+                self._ui_queue.put(
+                    lambda p=out_path, img=pil_img, m=meta, fin=is_final: self._on_generation_success(
+                        p, img, m, is_final=fin
+                    )
+                )
         except Exception as exc:
             self._logger.exception("Falha na geração de imagem:")
             self._ui_queue.put(lambda err=str(exc): self._on_generation_error(err))
@@ -1576,10 +1548,12 @@ class NanoBananaApp(ctk.CTk):
         out_path: Path,
         pil_img: Image.Image,
         meta: GenerationMetadata | None = None,
+        is_final: bool = True,
     ) -> None:
         t0 = time.perf_counter()
-        self.is_generating = False
-        self.generate_btn.configure(state="normal", text="Gerar Imagem (Ctrl+Enter)")
+        if is_final:
+            self.is_generating = False
+            self.generate_btn.configure(state="normal", text="Gerar Imagem (Ctrl+Enter)")
         self.last_generated_path = out_path
         self.last_pil_image = pil_img
         self.open_img_btn.configure(state="normal")
@@ -1590,7 +1564,10 @@ class NanoBananaApp(ctk.CTk):
         self._update_turn_status_label()
         self._update_metadata_panel(meta, has_image=True)
 
-        self.status_label.configure(text="Imagem gerada com sucesso.", text_color="#6FCF97")
+        self.status_label.configure(
+            text="Imagem gerada com sucesso." if is_final else "Lote em andamento...",
+            text_color="#6FCF97" if is_final else ACCENT_AMBER,
+        )
         self.saved_path_label.configure(text=f"Salva em: {out_path}")
         self._log(f"Imagem salva em: {out_path}")
         self._refresh_history()

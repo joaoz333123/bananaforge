@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BananaForge Web — Gemini Image Studio • JZ DEV</title>
+  <style>
+    :root {
+      --bg-app: #131518;
+      --bg-panel: #1B1E23;
+      --bg-input: #14171B;
+      --border: #2B3038;
+      --text: #F1F3F5;
+      --muted: #9AA1AC;
+      --amber: #E5A93C;
+      --amber-hover: #CF952C;
+      --amber-text: #131518;
+      --danger: #D9534F;
+      --ok: #6FCF97;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg-app);
+      color: var(--text);
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    header {
+      height: 52px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      flex-shrink: 0;
+    }
+    .brand { display: flex; align-items: baseline; gap: 10px; }
+    .brand strong { font-size: 15px; letter-spacing: 0.4px; }
+    .brand span { font-size: 11px; font-weight: 700; color: var(--amber); }
+    .topbar-right { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--muted); }
+    button, select, input, textarea {
+      font-family: inherit;
+      color: var(--text);
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      outline: none;
+    }
+    button {
+      background: #252A32;
+      cursor: pointer;
+      padding: 6px 12px;
+      font-size: 12px;
+      transition: background 0.15s;
+    }
+    button:hover:not(:disabled) { background: #313742; }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-amber {
+      background: var(--amber);
+      color: var(--amber-text);
+      border-color: var(--amber);
+      font-weight: 700;
+    }
+    .btn-amber:hover:not(:disabled) { background: var(--amber-hover); }
+    .btn-ghost-amber { color: var(--amber); font-weight: 600; }
+    .btn-danger { background: transparent; color: var(--danger); border-color: transparent; }
+    .btn-danger:hover:not(:disabled) { background: #352024; }
+    main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 410px 1fr 235px;
+      gap: 14px;
+      padding: 14px;
+      min-height: 0;
+    }
+    .panel {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      padding: 14px 16px;
+      min-height: 0;
+    }
+    .section-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .model-list { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+    .model-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12.5px;
+      cursor: pointer;
+    }
+    .model-item input { accent-color: var(--amber); width: 15px; height: 15px; }
+    .row-between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .res-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+    .res-options { display: flex; gap: 10px; font-size: 12.5px; }
+    .res-options label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+    .res-options input { accent-color: var(--amber); }
+    select, input[type="text"] { padding: 6px 8px; font-size: 12px; }
+    .presets-bar { display: flex; gap: 6px; margin-bottom: 6px; }
+    .presets-bar select { flex: 1; }
+    textarea {
+      flex: 1;
+      min-height: 90px;
+      resize: none;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.45;
+      margin-bottom: 8px;
+    }
+    .box {
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      margin-bottom: 8px;
+    }
+    .ref-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; min-height: 28px; align-items: center; }
+    .chip {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 3px 6px;
+      font-size: 11px;
+    }
+    .chip img { width: 28px; height: 28px; object-fit: cover; border-radius: 4px; }
+    .chip button { padding: 1px 5px; font-size: 10px; }
+    .status-line { font-size: 12px; color: var(--muted); margin-top: 6px; min-height: 16px; }
+    .preview-box {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 0;
+      overflow: hidden;
+      padding: 10px;
+      margin-bottom: 8px;
+    }
+    .preview-box img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 4px; }
+    .meta-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 11.5px;
+      color: var(--muted);
+    }
+    .meta-text { white-space: pre-line; line-height: 1.35; flex: 1; }
+    .log-panel {
+      background: var(--bg-app);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      font-family: Consolas, monospace;
+      font-size: 11px;
+      height: 130px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      margin-top: 8px;
+      display: none;
+    }
+    .history-list {
+      flex: 1;
+      overflow-y: auto;
+      background: var(--bg-input);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .hist-card {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px;
+      cursor: pointer;
+      text-align: center;
+    }
+    .hist-card.active { border: 2px solid var(--amber); }
+    .hist-card img { width: 100%; max-height: 110px; object-fit: contain; border-radius: 4px; }
+    .hist-card span { display: block; font-size: 10px; color: var(--muted); margin-top: 4px; word-break: break-all; }
+    @media (max-width: 1050px) {
+      body { height: auto; overflow: auto; }
+      main { grid-template-columns: 1fr; }
+      .history-panel { min-height: 280px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <strong>BANANAFORGE</strong>
+      <span>WEB STUDIO • by JZ DEV</span>
+    </div>
+    <div class="topbar-right">
+      <span id="apiKeyStatus">API Key: verificando...</span>
+      <button id="apiKeyBtn">Configurar API Key</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Painel Esquerdo: Controles -->
+    <section class="panel">
+      <div class="section-title">Modelo</div>
+      <div id="modelList" class="model-list"></div>
+
+      <div class="row-between" style="margin-bottom:4px;">
+        <span class="section-title" style="margin:0;">Resolução</span>
+        <div style="display:flex;gap:14px;">
+          <span class="section-title" style="margin:0;">Proporção</span>
+          <span class="section-title" style="margin:0;">Lote</span>
+        </div>
+      </div>
+      <div class="res-row">
+        <div id="resOptions" class="res-options"></div>
+        <div style="display:flex;gap:6px;">
+          <select id="aspectSelect"></select>
+          <select id="batchSelect" title="Quantidade de variações por disparo">
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="3">3x</option>
+            <option value="4">4x</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row-between" style="margin-bottom:4px;">
+        <span class="section-title" style="margin:0;">Descrição da Imagem (Prompt)</span>
+      </div>
+      <div class="presets-bar">
+        <select id="presetSelect"></select>
+        <button id="savePresetBtn">+ Preset</button>
+      </div>
+      <textarea id="promptBox" placeholder="Descreva a imagem que deseja gerar ou editar... (Ctrl+Enter gera, Ctrl+V cola imagem)"></textarea>
+
+      <div class="box row-between">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;font-weight:600;cursor:pointer;">
+          <input type="checkbox" id="multiTurnCheck" style="accent-color:var(--amber);" />
+          Multi-turno
+        </label>
+        <span id="turnStatus" style="font-size:11px;color:var(--muted);">Sessão: nova</span>
+        <button id="resetTurnBtn" style="padding:3px 8px;font-size:11px;">Nova sessão</button>
+      </div>
+
+      <div class="box" id="dropZone">
+        <div class="row-between">
+          <div style="display:flex;gap:6px;">
+            <button id="attachBtn">Anexar imgs (0/4)</button>
+            <button id="pasteHintBtn" title="Ou pressione Ctrl+V em qualquer lugar">Colar (Ctrl+V)</button>
+          </div>
+          <button id="clearRefBtn" class="btn-danger" disabled>Limpar</button>
+        </div>
+        <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp" multiple style="display:none;" />
+        <div id="refChips" class="ref-chips"></div>
+      </div>
+
+      <div class="section-title">Pasta para Salvar</div>
+      <input type="text" id="outputDirInput" style="width:100%;margin-bottom:10px;" />
+
+      <button id="generateBtn" class="btn-amber" style="height:40px;font-size:14px;">Gerar Imagem (Ctrl+Enter)</button>
+      <div id="statusLabel" class="status-line">Pronto para gerar.</div>
+    </section>
+
+    <!-- Painel Central: Preview -->
+    <section class="panel">
+      <div class="row-between" style="margin-bottom:8px;">
+        <span class="section-title" style="margin:0;">Visualização</span>
+        <div style="display:flex;gap:6px;">
+          <button id="copyImgBtn" disabled>Copiar imagem</button>
+          <button id="downloadImgBtn" disabled>Baixar PNG</button>
+          <button id="toggleLogBtn">Mostrar log</button>
+        </div>
+      </div>
+
+      <div class="preview-box" id="previewBox">
+        <span style="color:var(--muted);font-size:13px;">A imagem gerada aparecerá aqui.</span>
+      </div>
+
+      <div class="box meta-bar">
+        <div id="metaInfo" class="meta-text">Metadados: selecione ou gere uma imagem para visualizar parâmetros.</div>
+        <div style="display:flex;gap:6px;flex-shrink:0;">
+          <button id="restoreMetaBtn" disabled>Restaurar Config/Prompt</button>
+          <button id="useAsRefBtn" class="btn-ghost-amber" disabled>Usar como Ref</button>
+        </div>
+      </div>
+
+      <div id="savedPathLabel" style="font-size:11px;color:var(--muted);"></div>
+      <div id="logPanel" class="log-panel"></div>
+    </section>
+
+    <!-- Painel Direito: Galeria -->
+    <section class="panel history-panel">
+      <div class="row-between" style="margin-bottom:8px;">
+        <span class="section-title" style="margin:0;">Imagens Geradas</span>
+        <button id="refreshHistBtn" style="padding:3px 8px;">↻</button>
+      </div>
+      <div id="historyList" class="history-list"></div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      models: {},
+      presets: [],
+      selectedModelKey: "2.1",
+      selectedResolution: "2K",
+      refImages: [],
+      currentInteractionId: null,
+      currentMetadata: null,
+      currentImageUrl: null,
+      currentImagePath: null,
+      currentImageName: null,
+      isBusy: false,
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function logMsg(msg) {
+      const ts = new Date().toLocaleTimeString("pt-BR");
+      const panel = $("logPanel");
+      panel.textContent += `[${ts}] ${msg}\n`;
+      panel.scrollTop = panel.scrollHeight;
+    }
+
+    function setStatus(msg, color = "var(--muted)") {
+      const el = $("statusLabel");
+      el.textContent = msg;
+      el.style.color = color;
+    }
+
+    function updateTurnStatus() {
+      const lbl = $("turnStatus");
+      if (state.currentInteractionId) {
+        const shortId = state.currentInteractionId.slice(0, 12) + "...";
+        const active = $("multiTurnCheck").checked;
+        lbl.textContent = active ? `Ativa: ${shortId}` : `Pronta (${shortId})`;
+        lbl.style.color = active ? "var(--amber)" : "var(--muted)";
+      } else {
+        lbl.textContent = "Sessão: nova";
+        lbl.style.color = "var(--muted)";
+      }
+    }
+
+    function renderRefChips() {
+      const container = $("refChips");
+      container.innerHTML = "";
+      $("attachBtn").textContent = `Anexar imgs (${state.refImages.length}/4)`;
+      $("clearRefBtn").disabled = state.refImages.length === 0;
+
+      if (state.refImages.length === 0) {
+        const span = document.createElement("span");
+        span.style.cssText = "font-size:11px;color:var(--muted);";
+        span.textContent = "Nenhuma referência (até 4 imgs • cole com Ctrl+V ou arraste)";
+        container.appendChild(span);
+        return;
+      }
+
+      state.refImages.forEach((ref, idx) => {
+        const chip = document.createElement("div");
+        chip.className = "chip";
+        const img = document.createElement("img");
+        img.src = ref.data_url;
+        const name = document.createElement("span");
+        name.textContent = ref.name.length > 12 ? ref.name.slice(0, 10) + "…" : ref.name;
+        const rm = document.createElement("button");
+        rm.className = "btn-danger";
+        rm.textContent = "✕";
+        rm.onclick = () => {
+          state.refImages.splice(idx, 1);
+          renderRefChips();
+        };
+        chip.append(img, name, rm);
+        container.appendChild(chip);
+      });
+    }
+
+    function addRefFiles(files) {
+      Array.from(files).forEach((file) => {
+        if (!file.type.startsWith("image/")) return;
+        if (state.refImages.length >= 4) {
+          setStatus("Limite máximo de 4 referências atingido.", "var(--amber)");
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => {
+          if (state.refImages.length < 4) {
+            state.refImages.push({ name: file.name || "clipboard.png", data_url: reader.result });
+            renderRefChips();
+            logMsg(`Referência adicionada: ${file.name || "clipboard.png"}`);
+          }
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function renderPresets() {
+      const sel = $("presetSelect");
+      sel.innerHTML = "";
+      const def = document.createElement("option");
+      def.value = "";
+      def.textContent = "Aplicar preset...";
+      sel.appendChild(def);
+      state.presets.forEach((p) => {
+        const opt = document.createElement("option");
+        opt.value = p.suffix;
+        opt.textContent = p.name;
+        sel.appendChild(opt);
+      });
+    }
+
+    function showPreview(url, path, name, meta) {
+      state.currentImageUrl = url;
+      state.currentImagePath = path;
+      state.currentImageName = name;
+      state.currentMetadata = meta;
+
+      $("previewBox").innerHTML = "";
+      const img = document.createElement("img");
+      img.src = url;
+      $("previewBox").appendChild(img);
+
+      $("copyImgBtn").disabled = false;
+      $("downloadImgBtn").disabled = false;
+      $("useAsRefBtn").disabled = false;
+      $("savedPathLabel").textContent = `Arquivo: ${path}`;
+
+      if (meta) {
+        $("metaInfo").textContent = meta.badge;
+        $("metaInfo").style.color = "var(--text)";
+        $("restoreMetaBtn").disabled = false;
+      } else {
+        $("metaInfo").textContent = "Metadados: não disponíveis nesta imagem.";
+        $("metaInfo").style.color = "var(--muted)";
+        $("restoreMetaBtn").disabled = true;
+      }
+    }
+
+    async function refreshHistory() {
+      const outDir = encodeURIComponent($("outputDirInput").value.trim());
+      const res = await fetch(`/api/history?output_dir=${outDir}`);
+      const data = await res.json();
+      const list = $("historyList");
+      list.innerHTML = "";
+
+      if (!data.items.length) {
+        list.innerHTML = `<div style="color:var(--muted);font-size:12px;text-align:center;padding:16px;">Nenhuma imagem ainda.</div>`;
+        return;
+      }
+
+      data.items.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "hist-card" + (item.path === state.currentImagePath ? " active" : "");
+        const imgUrl = `/api/history/image?path=${encodeURIComponent(item.path)}&output_dir=${outDir}&t=${item.mtime}`;
+        card.innerHTML = `<img src="${imgUrl}" loading="lazy" /><span>${item.name}</span>`;
+        card.onclick = async () => {
+          const metaRes = await fetch(`/api/history/metadata?path=${encodeURIComponent(item.path)}&output_dir=${outDir}`);
+          const metaData = await metaRes.json();
+          showPreview(imgUrl, item.path, item.name, metaData.metadata);
+          document.querySelectorAll(".hist-card").forEach((c) => c.classList.remove("active"));
+          card.classList.add("active");
+          logMsg(`Imagem selecionada na galeria: ${item.name}`);
+        };
+        list.appendChild(card);
+      });
+    }
+
+    async function generateImage() {
+      if (state.isBusy) return;
+      const prompt = $("promptBox").value.trim();
+      if (!prompt) {
+        setStatus("Digite um prompt antes de gerar.", "var(--danger)");
+        return;
+      }
+      const batchCount = parseInt($("batchSelect").value, 10) || 1;
+      state.isBusy = true;
+      $("generateBtn").disabled = true;
+      $("generateBtn").textContent = batchCount > 1 ? `Gerando lote (${batchCount}x)...` : "Gerando...";
+      setStatus(
+        batchCount > 1 ? `Gerando lote de ${batchCount} imagens na Gemini API...` : "Gerando imagem na Gemini API...",
+        "var(--amber)"
+      );
+      const prevId = $("multiTurnCheck").checked ? state.currentInteractionId : null;
+      logMsg(`Gerando | modelo=${state.selectedModelKey} | res=${state.selectedResolution} | prop=${$("aspectSelect").value} | lote=${batchCount}x | refs=${state.refImages.length}`);
+
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt,
+            model_key: state.selectedModelKey,
+            resolution: state.selectedResolution,
+            aspect_ratio: $("aspectSelect").value,
+            batch_count: batchCount,
+            output_dir: $("outputDirInput").value.trim(),
+            previous_interaction_id: prevId,
+            current_image_path: prevId ? state.currentImagePath : null,
+            ref_images: state.refImages,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.detail || "Falha na geração");
+
+        if (data.metadata?.interaction_id) {
+          state.currentInteractionId = data.metadata.interaction_id;
+          updateTurnStatus();
+        }
+        const outDir = encodeURIComponent($("outputDirInput").value.trim());
+        const imgUrl = `/api/history/image?path=${encodeURIComponent(data.path)}&output_dir=${outDir}&t=${Date.now()}`;
+        showPreview(imgUrl, data.path, data.name, data.metadata);
+        if (data.batch_count > 1) {
+          setStatus(`Lote (${data.batch_count}x) gerado em ${data.elapsed_s}s (${data.width}x${data.height}px)`, "var(--ok)");
+          data.batch_results.forEach((item, idx) => {
+            logMsg(`Lote [${idx + 1}/${data.batch_count}] ${item.name} | ${item.usage_summary}`);
+          });
+        } else {
+          setStatus(`Gerada em ${data.elapsed_s}s (${data.width}x${data.height}px)`, "var(--ok)");
+          logMsg(`Sucesso em ${data.elapsed_s}s | ${data.usage_summary}`);
+        }
+        await refreshHistory();
+      } catch (err) {
+        setStatus(`Erro: ${err.message}`, "var(--danger)");
+        logMsg(`ERRO: ${err.message}`);
+      } finally {
+        state.isBusy = false;
+        $("generateBtn").disabled = false;
+        $("generateBtn").textContent = "Gerar Imagem (Ctrl+Enter)";
+      }
+    }
+
+    async function init() {
+      const res = await fetch("/api/config");
+      const cfg = await res.json();
+      state.models = cfg.models;
+      state.presets = cfg.presets;
+
+      $("apiKeyStatus").textContent = `API Key: ${cfg.api_key_masked}`;
+      $("outputDirInput").value = cfg.default_output_dir;
+
+      const modelList = $("modelList");
+      Object.entries(cfg.models).forEach(([key, info]) => {
+        const label = document.createElement("label");
+        label.className = "model-item";
+        label.innerHTML = `<input type="radio" name="model" value="${key}" ${key === state.selectedModelKey ? "checked" : ""} /> <span>${info.label}</span>`;
+        label.querySelector("input").onchange = () => { state.selectedModelKey = key; };
+        modelList.appendChild(label);
+      });
+
+      const resOpts = $("resOptions");
+      cfg.resolutions.forEach((r) => {
+        const label = document.createElement("label");
+        label.innerHTML = `<input type="radio" name="res" value="${r}" ${r === state.selectedResolution ? "checked" : ""} /> <span>${r}</span>`;
+        label.querySelector("input").onchange = () => { state.selectedResolution = r; };
+        resOpts.appendChild(label);
+      });
+
+      cfg.aspect_ratios.forEach((ar) => {
+        const opt = document.createElement("option");
+        opt.value = ar;
+        opt.textContent = ar;
+        $("aspectSelect").appendChild(opt);
+      });
+
+      renderPresets();
+      renderRefChips();
+      updateTurnStatus();
+      await refreshHistory();
+      logMsg("BananaForge Web pronto.");
+    }
+
+    $("apiKeyBtn").onclick = async () => {
+      const val = prompt("Cole sua GEMINI_API_KEY (salva localmente em .env):");
+      if (!val || !val.trim()) return;
+      const res = await fetch("/api/api-key", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_key: val.trim() }),
+      });
+      const data = await res.json();
+      if (res.ok) $("apiKeyStatus").textContent = `API Key: ${data.api_key_masked}`;
+    };
+
+    $("presetSelect").onchange = async (e) => {
+      const suffix = e.target.value;
+      if (!suffix) return;
+      const res = await fetch("/api/apply-preset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: $("promptBox").value, suffix }),
+      });
+      const data = await res.json();
+      $("promptBox").value = data.prompt;
+      e.target.value = "";
+    };
+
+    $("savePresetBtn").onclick = async () => {
+      const suffix = $("promptBox").value.trim();
+      if (!suffix) return setStatus("Digite um texto no prompt antes de salvar preset.", "var(--danger)");
+      const name = prompt("Nome do novo preset:");
+      if (!name || !name.trim()) return;
+      const res = await fetch("/api/presets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), suffix }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        state.presets = data.presets;
+        renderPresets();
+        setStatus(`Preset '${name.trim()}' salvo.`, "var(--ok)");
+      }
+    };
+
+    $("multiTurnCheck").onchange = updateTurnStatus;
+    $("resetTurnBtn").onclick = () => {
+      state.currentInteractionId = null;
+      $("multiTurnCheck").checked = false;
+      updateTurnStatus();
+      logMsg("Sessão multi-turno resetada.");
+    };
+
+    $("attachBtn").onclick = () => $("fileInput").click();
+    $("fileInput").onchange = (e) => { addRefFiles(e.target.files); e.target.value = ""; };
+    $("clearRefBtn").onclick = () => { state.refImages = []; renderRefChips(); };
+    $("pasteHintBtn").onclick = async () => {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          const imgType = item.types.find((t) => t.startsWith("image/"));
+          if (imgType) {
+            const blob = await item.getType(imgType);
+            addRefFiles([new File([blob], "clipboard.png", { type: imgType })]);
+            return;
+          }
+        }
+        setStatus("Nenhuma imagem no clipboard.", "var(--amber)");
+      } catch {
+        setStatus("Use Ctrl+V na janela para colar imagem.", "var(--amber)");
+      }
+    };
+
+    window.addEventListener("paste", (e) => {
+      const items = e.clipboardData?.items || [];
+      const files = [];
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          const f = item.getAsFile();
+          if (f) files.push(f);
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        addRefFiles(files);
+      }
+    });
+
+    $("dropZone").ondragover = (e) => e.preventDefault();
+    $("dropZone").ondrop = (e) => { e.preventDefault(); addRefFiles(e.dataTransfer.files); };
+
+    $("generateBtn").onclick = generateImage;
+    $("promptBox").addEventListener("keydown", (e) => {
+      if (e.ctrlKey && e.key === "Enter") { e.preventDefault(); generateImage(); }
+    });
+
+    $("copyImgBtn").onclick = async () => {
+      if (!state.currentImageUrl) return;
+      try {
+        const blob = await (await fetch(state.currentImageUrl)).blob();
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+        setStatus("Imagem copiada para o clipboard.", "var(--ok)");
+      } catch (err) {
+        setStatus("Navegador bloqueou cópia automática; use Baixar PNG.", "var(--amber)");
+      }
+    };
+
+    $("downloadImgBtn").onclick = () => {
+      if (!state.currentImageUrl) return;
+      const a = document.createElement("a");
+      a.href = state.currentImageUrl;
+      a.download = state.currentImageName || "nanobanana.png";
+      a.click();
+    };
+
+    $("restoreMetaBtn").onclick = () => {
+      const m = state.currentMetadata;
+      if (!m) return;
+      if (m.prompt) $("promptBox").value = m.prompt;
+      if (m.model_key && state.models[m.model_key]) {
+        state.selectedModelKey = m.model_key;
+        document.querySelector(`input[name="model"][value="${m.model_key}"]`).checked = true;
+      }
+      if (m.resolution) {
+        state.selectedResolution = m.resolution;
+        const r = document.querySelector(`input[name="res"][value="${m.resolution}"]`);
+        if (r) r.checked = true;
+      }
+      if (m.aspect_ratio) $("aspectSelect").value = m.aspect_ratio;
+      if (m.interaction_id) {
+        state.currentInteractionId = m.interaction_id;
+        updateTurnStatus();
+      }
+      setStatus("Configurações e prompt restaurados.", "var(--ok)");
+    };
+
+    $("useAsRefBtn").onclick = async () => {
+      if (!state.currentImageUrl || state.refImages.length >= 4) return;
+      const blob = await (await fetch(state.currentImageUrl)).blob();
+      addRefFiles([new File([blob], state.currentImageName || "ref.png", { type: blob.type || "image/png" })]);
+    };
+
+    $("toggleLogBtn").onclick = () => {
+      const p = $("logPanel");
+      const open = p.style.display === "block";
+      p.style.display = open ? "none" : "block";
+      $("toggleLogBtn").textContent = open ? "Mostrar log" : "Ocultar log";
+    };
+
+    $("refreshHistBtn").onclick = refreshHistory;
+    $("outputDirInput").onchange = refreshHistory;
+
+    init();
+  </script>
+</body>
+</html>
